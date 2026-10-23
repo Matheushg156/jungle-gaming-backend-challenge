@@ -4,11 +4,23 @@ import type { WagerTransaction } from '../../domain/entities/wager-transaction';
 import type { WagerResult } from '../wagering/wager.contracts';
 import type { ReferenceRetryState } from '../wagering/reference-retry-policy';
 import type { WagerTransactionKind } from '../../domain/entities/wager-transaction';
+import type { IntegrationEvent } from '../../domain/events/integration-event';
+import type { ProcessingContext } from '../events/processing-context';
 
 export interface StoredWager {
   transaction: WagerTransaction;
   result: WagerResult | null;
   referenceRetry: ReferenceRetryState | null;
+  processingContext: ProcessingContext;
+}
+
+export interface PersistWager {
+  transaction: WagerTransaction;
+  result: WagerResult;
+  events: readonly IntegrationEvent<object>[];
+  processingContext: ProcessingContext;
+  entry?: WalletLedgerEntry;
+  referenceRetry?: ReferenceRetryState;
 }
 
 export interface LockedWageringContext {
@@ -22,12 +34,7 @@ export interface LockedWageringContext {
     referenceId: string,
     kind: WagerTransactionKind,
   ): Promise<boolean>;
-  save(
-    transaction: WagerTransaction,
-    result: WagerResult,
-    entry?: WalletLedgerEntry,
-    referenceRetry?: ReferenceRetryState,
-  ): Promise<void>;
+  save(state: PersistWager): Promise<void>;
 }
 
 export abstract class WageringUnitOfWork {

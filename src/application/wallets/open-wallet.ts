@@ -7,6 +7,8 @@ import {
 import { WagerTransaction } from '../../domain/entities/wager-transaction';
 import { Money, type MoneyProps } from '../../domain/value-objects/money';
 import { WalletRepository } from '../ports/wallet.repository';
+import type { ProcessingContext } from '../events/processing-context';
+import { createWagerEvents } from '../events/create-wager-events';
 
 export interface OpenWalletInput {
   playerId: string;
@@ -16,7 +18,10 @@ export interface OpenWalletInput {
 export class OpenWallet {
   constructor(private readonly wallets: WalletRepository) {}
 
-  async execute(input: OpenWalletInput): Promise<Wallet> {
+  async execute(
+    input: OpenWalletInput,
+    processingContext: ProcessingContext = { correlationId: randomUUID() },
+  ): Promise<Wallet> {
     const initialBalance = Money.from(input.initialBalance);
     const at = new Date();
     const wallet = Wallet.open({
@@ -27,7 +32,7 @@ export class OpenWallet {
     });
 
     if (initialBalance.isZero()) {
-      await this.wallets.saveOpening({ wallet });
+      await this.wallets.saveOpening({ wallet, events: [], processingContext });
       return wallet;
     }
 
@@ -57,7 +62,18 @@ export class OpenWallet {
       createdAt: at,
     });
 
-    await this.wallets.saveOpening({ wallet, transaction, ledgerEntry });
+    await this.wallets.saveOpening({
+      wallet,
+      transaction,
+      ledgerEntry,
+      processingContext,
+      events: createWagerEvents(
+        transaction,
+        wallet,
+        ledgerEntry,
+        processingContext,
+      ),
+    });
     return wallet;
   }
 }

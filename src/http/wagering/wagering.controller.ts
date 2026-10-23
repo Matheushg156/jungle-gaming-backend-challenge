@@ -15,6 +15,7 @@ import { SubmitWager } from '../../application/wagering/submit-wager';
 import { WagerTransactionStatus } from '../../domain/entities/wager-transaction';
 import { DomainError } from '../../domain/errors/domain-error';
 import { ProviderIdentityGuard } from '../provider-identity.guard';
+import { readCorrelationId } from '../read-correlation-id';
 import { SubmitWagerDto } from './submit-wager.dto';
 import { WagerReadRepository } from '../../application/ports/wager-read.repository';
 
@@ -54,6 +55,7 @@ export class WageringController {
     )
     input: SubmitWagerDto,
     @Res({ passthrough: true }) response: HttpStatusResponse,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ) {
     if (!key) {
       throw new DomainError(
@@ -61,7 +63,9 @@ export class WageringController {
         'Idempotency-Key header is required',
       );
     }
-    const result = await this.submitWager.execute(input, key);
+    const result = await this.submitWager.execute(input, key, {
+      correlationId: readCorrelationId(correlationId),
+    });
     if (result.status === WagerTransactionStatus.Rejected) {
       response.status(422);
     } else if (result.status === WagerTransactionStatus.PendingReference) {

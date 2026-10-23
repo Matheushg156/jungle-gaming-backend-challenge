@@ -3,6 +3,7 @@ import { WageringUnitOfWork } from '../ports/wagering-unit-of-work';
 import { applyWager } from './apply-wager';
 import { createWagerResult } from './create-wager-result';
 import { ReferenceRetryPolicy } from './reference-retry-policy';
+import { createWagerEvents } from '../events/create-wager-events';
 
 export class RetryPendingReferences {
   constructor(private readonly unitOfWork: WageringUnitOfWork) {}
@@ -42,12 +43,20 @@ export class RetryPendingReferences {
               now,
               transaction.status === WagerTransactionStatus.PendingReference,
             );
-            await context.save(
+            await context.save({
               transaction,
-              createWagerResult(transaction, context.wallet),
-              entry,
-              retry,
-            );
+              result: createWagerResult(transaction, context.wallet),
+              processingContext: stored.processingContext,
+              events: createWagerEvents(
+                transaction,
+                context.wallet,
+                entry,
+                stored.processingContext,
+                WagerTransactionStatus.PendingReference,
+              ),
+              ...(entry ? { entry } : {}),
+              referenceRetry: retry,
+            });
             return true;
           },
         );

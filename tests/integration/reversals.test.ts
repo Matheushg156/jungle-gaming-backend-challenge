@@ -341,6 +341,8 @@ describe('Reversals and pending reference recovery', () => {
   });
 
   test('HTTP accepts reversals and the scheduled worker resolves them automatically', async () => {
+    const previousOutboxSetting = process.env.OUTBOX_PUBLISHER_ENABLED;
+    process.env.OUTBOX_PUBLISHER_ENABLED = 'false';
     const previousUrl = process.env.DATABASE_URL;
     const previousEnabled = process.env.REFERENCE_RECOVERY_ENABLED;
     process.env.DATABASE_URL = database.url;
@@ -379,6 +381,11 @@ describe('Reversals and pending reference recovery', () => {
       await assertBalance(bet.walletId, '100.00');
     } finally {
       await app.close();
+      if (previousOutboxSetting === undefined) {
+        delete process.env.OUTBOX_PUBLISHER_ENABLED;
+      } else {
+        process.env.OUTBOX_PUBLISHER_ENABLED = previousOutboxSetting;
+      }
       if (previousUrl === undefined) {
         delete process.env.DATABASE_URL;
       } else {

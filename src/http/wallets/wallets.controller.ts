@@ -20,6 +20,7 @@ import { OpenWallet } from '../../application/wallets/open-wallet';
 import { Wallet } from '../../domain/entities/wallet';
 import { DomainError } from '../../domain/errors/domain-error';
 import { ProviderIdentityGuard } from '../provider-identity.guard';
+import { readCorrelationId } from '../read-correlation-id';
 import { CreateWalletDto } from './create-wallet.dto';
 import { LedgerQueryDto } from './ledger-query.dto';
 import { ListWalletLedger } from '../../application/wallets/list-wallet-ledger';
@@ -46,9 +47,14 @@ export class WalletsController {
       }),
     )
     input: CreateWalletDto,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ) {
     try {
-      return this.toResponse(await this.openWallet.execute(input));
+      return this.toResponse(
+        await this.openWallet.execute(input, {
+          correlationId: readCorrelationId(correlationId),
+        }),
+      );
     } catch (error: unknown) {
       if (error instanceof DomainError) {
         const body = { code: error.code, message: error.message };
@@ -99,16 +105,10 @@ export class WalletsController {
     @Param('walletId', new ParseUUIDPipe()) walletId: string,
     @Headers('x-correlation-id') correlationId: string | undefined,
   ) {
-    if (
-      correlationId !== undefined &&
-      !/^[A-Za-z0-9._:-]{1,128}$/.test(correlationId)
-    ) {
-      throw new DomainError(
-        'INVALID_CORRELATION_ID',
-        'X-Correlation-Id must contain 1 to 128 letters, digits, dots, underscores, colons or hyphens',
-      );
-    }
-    return this.reconcileWallet.execute(walletId, correlationId);
+    return this.reconcileWallet.execute(
+      walletId,
+      readCorrelationId(correlationId),
+    );
   }
 
   private toResponse(wallet: Wallet) {

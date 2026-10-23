@@ -4,6 +4,8 @@ import { Migration202610230001 } from './migrations/Migration202610230001';
 import { Migration202610230002 } from './migrations/Migration202610230002';
 import { Migration202610230003 } from './migrations/Migration202610230003';
 import { Migration202610230004 } from './migrations/Migration202610230004';
+import { Migration202610230005 } from './migrations/Migration202610230005';
+import { OutboxMessageSchema } from './schemas/outbox-message.schema';
 import { WalletSchema } from './schemas/wallet.schema';
 import { WagerTransactionSchema } from './schemas/wager-transaction.schema';
 import { WalletLedgerEntrySchema } from './schemas/wallet-ledger-entry.schema';
@@ -17,7 +19,12 @@ export async function connectDatabase(
 
   return MikroORM.init({
     clientUrl,
-    entities: [WalletSchema, WagerTransactionSchema, WalletLedgerEntrySchema],
+    entities: [
+      WalletSchema,
+      WagerTransactionSchema,
+      WalletLedgerEntrySchema,
+      OutboxMessageSchema,
+    ],
     extensions: [Migrator],
     migrations: {
       migrationsList: [
@@ -25,6 +32,7 @@ export async function connectDatabase(
         Migration202610230002,
         Migration202610230003,
         Migration202610230004,
+        Migration202610230005,
       ],
       transactional: true,
       allOrNothing: true,

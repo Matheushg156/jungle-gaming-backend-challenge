@@ -2,7 +2,7 @@
 
 ## Escopo atual
 
-Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas de transações, ledger paginado e reconciliação estão implementados. Inbox, outbox, mensageria, health checks e a instrumentação restante estão pendentes.
+Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas de transações, ledger paginado e reconciliação estão implementados. Os quatro eventos mínimos, a outbox transacional e a publicação em SQS estão implementados. Consumidor de entrada, inbox, DLQ, health checks e a instrumentação restante estão pendentes.
 
 ## Organização
 
@@ -24,7 +24,7 @@ MikroORM 6 foi escolhido por ser preferencial no enunciado e permitir explicitar
 
 O processamento usa `LockMode.PESSIMISTIC_WRITE` na linha da wallet, antes de ler e calcular o saldo, dentro de uma transação READ COMMITTED. Isso serializa operações da mesma wallet e permite paralelismo entre wallets distintas. O custo é a espera por lock em wallets muito disputadas. O limite de espera é 5 segundos, com timeout de statement de 15 segundos. Timeouts abortam a transação e retornam 503; o cliente pode reenviar a mesma key. Não há retry interno ilimitado.
 
-Cada chamada do repository cria um EntityManager com `fork()`, isolando Unit of Work e Identity Map. `transactional()` delimita o commit. A abertura persiste a wallet, a transação OPENING e o ledger com flushes explícitos para respeitar as foreign keys; flush não é commit. Falha em qualquer inserção reverte o conjunto. Saldo zero não gera OPENING. Inbox e outbox serão incluídos na fronteira transacional quando forem implementados.
+Cada chamada do repository cria um EntityManager com `fork()`, isolando Unit of Work e Identity Map. `transactional()` delimita o commit. A abertura persiste a wallet, a transação OPENING e o ledger com flushes explícitos para respeitar as foreign keys; flush não é commit. Falha em qualquer inserção reverte o conjunto. Saldo zero não gera OPENING. A outbox participa dessa mesma fronteira transacional. A inbox será acrescentada quando o consumidor de entrada for implementado.
 
 As migrations são a fonte da verdade do schema: não usamos atualização automática nem geração de schema em runtime. Elas são registradas explicitamente e executadas pelo Migrator, conforme a [documentação do MikroORM](https://mikro-orm.io/docs/migrations). A migration inicial possui `up` e `down`, testados em banco exclusivo e temporário. AJV 8 é uma dependência explícita para satisfazer o peer de `ajv-draft-04` na cadeia de dependências do ORM; sem ela, o AJV 6 do ESLint era resolvido incorretamente na execução com Bun.
 
@@ -44,7 +44,7 @@ A integração com Identity Provider fica fora da implementação inicial, pois 
 
 ## Decisões ainda pendentes
 
-- Extensão da taxonomia de falhas para mensageria; destino dos eventos da outbox.
+- Taxonomia e política de retry/DLQ do consumidor de entrada. O destino de saída é wager-events.fifo.
 
 Essas decisões serão resolvidas antes das respectivas implementações e acompanhadas de testes.
 
@@ -105,7 +105,7 @@ Cada instância consulta até 50 candidatas por execução. A seleção não blo
 
 Os testes incluem referências anteriores à BET, dois recuperadores concorrentes, persistência do backoff, expiração sem sleeps longos, falha e rollback durante recuperação e execução real do timer. A recuperação após reconexão não substitui os futuros testes de morte forçada de processos.
 
-Eventos e outbox ainda não fazem parte do processamento: esta é uma etapa intermediária e não atende à garantia final de não perder eventos após commit. A emissão do evento de rejeição por expiração também depende dessa próxima etapa.
+Transições de recuperação também persistem seus eventos na outbox, inclusive rejeição por expiração. Uma tentativa que continua pendente atualiza apenas a agenda, sem repetir o evento de pendência.
 
 ## Consultas e paginação do ledger
 
@@ -128,3 +128,23 @@ A diferença é armazenado menos calculado. Saldo inicial positivo entra na soma
 Uma diferença gera resposta `consistent: false`, log JSON com walletId e correlationId sem valores financeiros e incremento de wallet_reconciliation_mismatches_total. O cliente [@prometheus-io/client](https://github.com/prometheus/client_js) fornece Counter e Registry; usamos um registry por aplicação para evitar estado global compartilhado nos testes. A métrica é exposta em GET /metrics, sem labels por wallet para limitar cardinalidade. O contador é local ao processo e conta cada verificação divergente; um coletor poderá acompanhar cada instância. As outras métricas obrigatórias ainda não foram implementadas.
 
 O teste de divergência desabilita temporariamente o trigger de proteção apenas em um banco criado exclusivamente pelo teste, injeta inconsistência e comprova resposta, log, métrica e ausência de correção automática. Os demais testes mantêm as proteções habilitadas. Também há testes de paginação durante novas movimentações, isolamento de consultas por provedor e reconciliação durante débitos concorrentes.
+
+## Eventos e transactional outbox
+
+O domínio define IntegrationEvent e uma subclasse concreta por evento mínimo. Factories validam o estado correspondente; o payload contém MoneyProps e datas ISO no envelope. As cópias e o congelamento dos dados evitam mutação indireta. OutboxMessage encapsula estado de publicação, contador de falhas e backoff; reidratação não repete transições.
+
+Os casos de uso constroem os eventos, e os adapters persistem OutboxMessage com o mesmo EntityManager da operação financeira. Abertura positiva gera Processed e BalanceChanged; abertura zero não gera transação nem eventos. LOSS gera somente Processed. Rejeições geram somente Rejected. Uma referência inicialmente ausente gera PendingReference; novas tentativas pendentes não repetem esse evento. Uma resolução posterior ou expiração gera seu novo evento terminal. Replays não persistem eventos adicionais.
+
+O correlationId fornecido por HTTP é validado e persistido com a transação; quando ausente, um UUID é gerado. A recuperação reutiliza esse contexto. O causationId usa o identificador da transação por padrão e permite um identificador de transporte no futuro consumidor SQS. O contexto de transporte não participa do payloadHash.
+
+A migration 5 cria a outbox com envelope JSONB, eventId como chave primária e índice parcial para registros pendentes. Constraints validam a identidade do envelope e valores básicos de publicação. Triggers impedem mudança do envelope e alteração de mensagens já publicadas. Ela também adiciona metadados de correlação aos registros existentes: a proteção terminal é suspensa apenas dentro da migration transacional, sob o lock de alteração do schema, para preencher correlationId com o ID da transação sem modificar campos financeiros. Não há backfill de eventos históricos; as garantias de eventos se aplicam às novas transições a partir dessa migration. O down remove os eventos e metadados dessa etapa.
+
+O publisher obtém uma mensagem pendente com FOR UPDATE SKIP LOCKED e mantém apenas esse lock durante o envio. Mensagens e wallets são tabelas distintas, e o publisher não adquire lock da wallet. Há no máximo um envio em andamento por mensagem entre publishers concorrentes. A escolha evita leases e tokens de posse; o custo é manter uma transação SQL aberta durante uma chamada de rede. Cada envio possui timeout configurado, e cada transação trata somente uma mensagem. A execução processa até 10 mensagens e não se sobrepõe localmente.
+
+Após envio bem-sucedido, publishedAt é confirmado no banco. Erro de envio incrementa attempts e persiste nextAttemptAt com atraso exponencial de 1 segundo até 5 minutos. Não há expiração ou descarte de eventos confirmados. Erro de banco desfaz a tentativa e deixa o registro disponível. Uma falha após o envio, antes do commit, pode gerar reenvio com o mesmo eventId. Portanto, a entrega continua at-least-once e exige deduplicação persistente do consumidor.
+
+SqsEventPublisher usa o SDK oficial, aggregateId como MessageGroupId e eventId como MessageDeduplicationId em wager-events.fifo. A [documentação do SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SendMessage.html) descreve a janela limitada de deduplicação: ela é uma otimização, não a garantia final. Publishers concorrentes podem intercalar eventos da mesma wallet; consumidores devem usar eventId e walletVersion conforme sua responsabilidade, sem assumir ordenação global.
+
+O Compose fixa LocalStack 4.0.3 e usa um hook ready.d para a fila de saída. O serviço de testes separado usa porta 4567 e filas exclusivas por teste. A aplicação está configurada para o ambiente local do desafio; não há provisionamento AWS externo. O SDK não faz retry interno, deixando a política de publicação concentrada na outbox.
+
+O worker interrompe o timer e aguarda a operação em andamento antes de fechar banco e cliente SQS. Testes com PostgreSQL e SQS reais comprovam atomicidade com falha injetada na outbox, invisibilidade de registros não confirmados, dois publishers concorrentes, falha de envio, retomada por nova conexão e reenvio após rollback posterior à aceitação pelo SQS. Esse rollback simula a fronteira de falha; testes de morte forçada de processos e consumo idempotente ainda serão acrescentados.

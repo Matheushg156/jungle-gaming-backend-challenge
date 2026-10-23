@@ -12,6 +12,7 @@ import { toLedgerRecord } from '../mappers/ledger-entry.mapper';
 import { WalletSchema } from '../schemas/wallet.schema';
 import { WagerTransactionSchema } from '../schemas/wager-transaction.schema';
 import { WalletLedgerEntrySchema } from '../schemas/wallet-ledger-entry.schema';
+import { enqueueEvents } from '../enqueue-events';
 
 export class PostgresWalletRepository extends WalletRepository {
   constructor(private readonly orm: MikroORM) {
@@ -22,6 +23,8 @@ export class PostgresWalletRepository extends WalletRepository {
     wallet,
     transaction,
     ledgerEntry,
+    events,
+    processingContext,
   }: WalletOpening): Promise<void> {
     try {
       // A separate EntityManager gives each operation its own Unit of Work and Identity Map.
@@ -39,11 +42,16 @@ export class PostgresWalletRepository extends WalletRepository {
         await em.flush();
 
         if (transaction && ledgerEntry) {
-          em.create(WagerTransactionSchema, toWagerRecord(transaction, null));
+          em.create(
+            WagerTransactionSchema,
+            toWagerRecord(transaction, null, undefined, processingContext),
+          );
           await em.flush();
           em.create(WalletLedgerEntrySchema, toLedgerRecord(ledgerEntry));
           await em.flush();
         }
+        enqueueEvents(em, events);
+        await em.flush();
       });
     } catch (error: unknown) {
       if (error instanceof UniqueConstraintViolationException) {

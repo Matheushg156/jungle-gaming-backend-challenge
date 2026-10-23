@@ -8,11 +8,9 @@ import {
   WageringUnitOfWork,
   type LockedWageringContext,
   type StoredWager,
+  type PersistWager,
 } from '../../../application/ports/wagering-unit-of-work';
-import type { WagerResult } from '../../../application/wagering/wager.contracts';
 import type { Wallet } from '../../../domain/entities/wallet';
-import type { WagerTransaction } from '../../../domain/entities/wager-transaction';
-import type { WalletLedgerEntry } from '../../../domain/entities/wallet-ledger-entry';
 import { DomainError } from '../../../domain/errors/domain-error';
 import { rehydrateWallet } from '../mappers/wallet.mapper';
 import {
@@ -30,7 +28,7 @@ import {
   WagerTransactionKind,
   WagerTransactionStatus,
 } from '../../../domain/entities/wager-transaction';
-import type { ReferenceRetryState } from '../../../application/wagering/reference-retry-policy';
+import { enqueueEvents } from '../enqueue-events';
 
 function toStoredWager(
   record: WagerTransactionRecord | null,
@@ -39,6 +37,10 @@ function toStoredWager(
     ? {
         transaction: rehydrateWager(record),
         result: record.result,
+        processingContext: {
+          correlationId: record.correlationId,
+          ...(record.causationId ? { causationId: record.causationId } : {}),
+        },
         referenceRetry: record.referenceExpiresAt
           ? {
               attempts: record.referenceAttempts,
@@ -78,13 +80,20 @@ class PostgresLockedWageringContext implements LockedWageringContext {
     );
   }
 
-  async save(
-    transaction: WagerTransaction,
-    result: WagerResult,
-    entry?: WalletLedgerEntry,
-    referenceRetry?: ReferenceRetryState,
-  ): Promise<void> {
-    const record = toWagerRecord(transaction, result, referenceRetry);
+  async save({
+    transaction,
+    result,
+    entry,
+    referenceRetry,
+    events,
+    processingContext,
+  }: PersistWager): Promise<void> {
+    const record = toWagerRecord(
+      transaction,
+      result,
+      referenceRetry,
+      processingContext,
+    );
     const existing = await this.em.findOne(WagerTransactionSchema, {
       id: transaction.id,
     });
@@ -102,6 +111,8 @@ class PostgresLockedWageringContext implements LockedWageringContext {
       this.em.create(WalletLedgerEntrySchema, toLedgerRecord(entry));
       await this.em.flush();
     }
+    enqueueEvents(this.em, events);
+    await this.em.flush();
   }
 
   async hasProcessedReversal(

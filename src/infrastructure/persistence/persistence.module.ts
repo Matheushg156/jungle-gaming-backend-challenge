@@ -9,9 +9,16 @@ import { WalletReadRepository } from '../../application/ports/wallet-read.reposi
 import { WagerReadRepository } from '../../application/ports/wager-read.repository';
 import { PostgresWalletReadRepository } from './repositories/postgres-wallet-read.repository';
 import { PostgresWagerReadRepository } from './repositories/postgres-wager-read.repository';
+import { OutboxRepository } from '../../application/ports/outbox.repository';
+import { PostgresOutboxRepository } from './repositories/postgres-outbox.repository';
 
 @Module({
   providers: [
+    {
+      provide: OutboxRepository,
+      useFactory: (orm: MikroORM) => new PostgresOutboxRepository(orm),
+      inject: [MikroORM],
+    },
     {
       provide: WalletReadRepository,
       useFactory: (orm: MikroORM) => new PostgresWalletReadRepository(orm),
@@ -35,6 +42,7 @@ import { PostgresWagerReadRepository } from './repositories/postgres-wager-read.
     },
   ],
   exports: [
+    OutboxRepository,
     WalletRepository,
     WageringUnitOfWork,
     WalletReadRepository,

@@ -1,6 +1,40 @@
 name: jungle-games
 
 services:
+  localstack:
+    image: localstack/localstack:4.0.3
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+    ports:
+      - '127.0.0.1:${LOCALSTACK_PORT:-4566}:4566'
+    volumes:
+      - ./docker/localstack/ready.sh:/etc/localstack/init/ready.d/ready.sh:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'awslocal sqs get-queue-url --queue-name wager-events.fifo > /dev/null',
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  localstack-test:
+    image: localstack/localstack:4.0.3
+    profiles: ['test']
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+    ports:
+      - '127.0.0.1:${LOCALSTACK_TEST_PORT:-4567}:4566'
+    healthcheck:
+      test: ['CMD-SHELL', 'awslocal sqs list-queues > /dev/null']
+      interval: 2s
+      timeout: 5s
+      retries: 60
   postgres:
     image: postgres:17-alpine
     environment:

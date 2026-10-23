@@ -15,6 +15,8 @@ import { ReferenceRetryPolicy } from './reference-retry-policy';
 import { WagerTransactionStatus } from '../../domain/entities/wager-transaction';
 import { hashWagerPayload } from './hash-wager-payload';
 import type { SubmitWagerInput, SubmitWagerResult } from './wager.contracts';
+import type { ProcessingContext } from '../events/processing-context';
+import { createWagerEvents } from '../events/create-wager-events';
 
 export class SubmitWager {
   constructor(private readonly unitOfWork: WageringUnitOfWork) {}
@@ -22,6 +24,7 @@ export class SubmitWager {
   async execute(
     input: SubmitWagerInput,
     idempotencyKey: string,
+    processingContext: ProcessingContext = { correlationId: randomUUID() },
   ): Promise<SubmitWagerResult> {
     if (!/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
       throw new DomainError(
@@ -88,7 +91,19 @@ export class SubmitWager {
         transaction.status === WagerTransactionStatus.PendingReference
           ? ReferenceRetryPolicy.initial(transaction.createdAt)
           : undefined;
-      await context.save(transaction, result, entry, retry);
+      await context.save({
+        transaction,
+        result,
+        processingContext,
+        events: createWagerEvents(
+          transaction,
+          context.wallet,
+          entry,
+          processingContext,
+        ),
+        ...(entry ? { entry } : {}),
+        ...(retry ? { referenceRetry: retry } : {}),
+      });
       return { ...result, idempotentReplay: false };
     });
   }

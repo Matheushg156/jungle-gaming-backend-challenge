@@ -34,7 +34,9 @@ let baseUrl: string;
 const previousDatabaseUrl = process.env.DATABASE_URL;
 const previousRecoverySetting = process.env.REFERENCE_RECOVERY_ENABLED;
 
+const previousOutboxSetting = process.env.OUTBOX_PUBLISHER_ENABLED;
 beforeAll(async () => {
+  process.env.OUTBOX_PUBLISHER_ENABLED = 'false';
   database = await createTestDatabase();
   submit = new SubmitWager(new PostgresWageringUnitOfWork(database.orm));
   openWallet = new OpenWallet(new PostgresWalletRepository(database.orm));
@@ -46,6 +48,11 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(async () => {
+  if (previousOutboxSetting === undefined) {
+    delete process.env.OUTBOX_PUBLISHER_ENABLED;
+  } else {
+    process.env.OUTBOX_PUBLISHER_ENABLED = previousOutboxSetting;
+  }
   if (previousRecoverySetting === undefined) {
     delete process.env.REFERENCE_RECOVERY_ENABLED;
   } else {
