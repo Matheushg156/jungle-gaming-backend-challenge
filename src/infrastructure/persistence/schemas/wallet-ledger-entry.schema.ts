@@ -1,4 +1,9 @@
-import { DecimalType, EntitySchema } from '@mikro-orm/core';
+import {
+  BigIntType,
+  DecimalType,
+  EntitySchema,
+  type Opt,
+} from '@mikro-orm/core';
 import { LedgerDirection } from '../../../domain/entities/wallet-ledger-entry';
 
 export interface WalletLedgerEntryRecord {
@@ -11,6 +16,7 @@ export interface WalletLedgerEntryRecord {
   balanceBefore: string;
   balanceAfter: string;
   createdAt: Date;
+  sequenceNumber: Opt<string>;
 }
 
 export const WalletLedgerEntrySchema =
@@ -35,5 +41,6 @@ export const WalletLedgerEntrySchema =
         scale: 2,
       },
       createdAt: { type: Date, columnType: 'timestamptz' },
+      sequenceNumber: { type: new BigIntType('string'), autoincrement: true },
     },
   });

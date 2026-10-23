@@ -4,7 +4,7 @@ Implementação incremental do desafio técnico de processamento distribuído de
 
 ## Estado atual
 
-Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. Demais consultas, reconciliação, SQS, inbox, outbox e observabilidade ainda estão pendentes.
+Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. As consultas de transações, o ledger paginado e a reconciliação também estão disponíveis. SQS, inbox, outbox, health checks e as demais métricas e logs ainda estão pendentes.
 
 ## Requisitos locais
 
@@ -53,7 +53,7 @@ bun run test:integration
 bun run test
 ```
 
-`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O container de testes usa armazenamento temporário e porta 5433. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Também verificam apostas concorrentes, 50 duplicatas em três processos independentes, replay com saldo original, rollback de aposta e progresso de wallets distintas. Cobrem também reversões, recuperadores concorrentes, agenda persistente, expiração e worker agendado real. Ainda não cobrem SQS, morte forçada de workers ou outbox.
+`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O container de testes usa armazenamento temporário e porta 5433. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Também verificam apostas concorrentes, 50 duplicatas em três processos independentes, replay com saldo original, rollback de aposta e progresso de wallets distintas. Cobrem também reversões, recuperadores concorrentes, agenda persistente, expiração e worker agendado real. Cobrem consultas por provedor, páginas estáveis do ledger, reconciliação concorrente e detecção de divergências com log e métrica. Ainda não cobrem SQS, morte forçada de workers ou outbox.
 
 ## Organização das pastas
 
@@ -63,7 +63,8 @@ src/
   app.module.ts
   application/
     ports/          # Contratos necessários aos casos de uso
-    wallets/        # Abertura de wallet
+    wallets/        # Abertura, paginação e reconciliação
+    queries/        # Contratos de leitura
     wagering/       # Submissão e contratos das apostas
   domain/
     entities/       # Wallet (aggregate root), transações e lançamentos
@@ -75,6 +76,7 @@ src/
   infrastructure/
     persistence/    # Conexão, schemas, repositories e migrations
     workers/        # Agendamento da recuperação de referências
+    observability/  # Registro e exposição de métricas
 tests/
   integration/      # PostgreSQL real, HTTP e concorrência
   support/          # Banco isolado e protocolo dos processos de teste
@@ -93,7 +95,7 @@ O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplica
 2. PostgreSQL, MikroORM, migrations e abertura de wallet — implementados.
 3. BET, WIN e LOSS por HTTP, idempotência e concorrência — implementados.
 4. REFUND, ROLLBACK e recuperação de referências — implementados.
-5. Consultas restantes e reconciliação.
+5. Consultas e reconciliação — implementadas.
 6. SQS, inbox, outbox e recuperação de falhas.
 7. Observabilidade, testes distribuídos e documentação final.
 
@@ -117,3 +119,21 @@ WIN e LOSS podem referenciar uma BET com `referenceExternalTransactionId`. REFUN
 Referências ausentes são persistidas como pendentes. O worker roda a cada segundo, com backoff de 1 segundo até 5 minutos e expiração após 24 horas. O estado sobrevive a reinícios. `REFERENCE_RECOVERY_ENABLED=false` desativa apenas o agendamento. Referências ainda indisponíveis na checagem de expiração geram REFERENCE_NOT_FOUND. Reversão sem saldo usa REVERSAL_INSUFFICIENT_FUNDS.
 
 A regra de uma reversão por tipo permite um REFUND e um ROLLBACK da mesma BET; essa interpretação está documentada em ARCHITECTURE.md. Eventos de integração e outbox também estão pendentes, portanto o desafio ainda não está completo.
+
+## Consultas e reconciliação
+
+```sh
+curl http://localhost:3000/wagering/transactions/TRANSACTION_ID
+curl http://localhost:3000/providers/provider-a/wagering/transactions/bet-1
+curl 'http://localhost:3000/wallets/WALLET_ID/ledger?limit=50'
+curl -X POST http://localhost:3000/wallets/WALLET_ID/reconciliation
+curl http://localhost:3000/metrics
+```
+
+As consultas retornam 200; recursos inexistentes retornam 404; identificadores ou parâmetros inválidos retornam 400. A consulta de transação inclui `result`, com o snapshot persistido do processamento, ou null para OPENING. Não expõe hash ou idempotency key.
+
+O ledger retorna `{ "items": [...], "nextCursor": "..." }`. O limite padrão é 50 e aceita de 1 a 100 entradas. Siga `nextCursor` no parâmetro `cursor` da mesma wallet até receber null. A ordem segue a sequência de inserção do ledger. As páginas mantêm o limite capturado na primeira consulta: novas movimentações aparecem ao iniciar outra paginação. O cursor é opaco, vinculado à wallet e não deve ser interpretado ou montado pelo cliente.
+
+A reconciliação retorna saldo armazenado, soma calculada do ledger, `difference = storedBalance - calculatedBalance`, `consistent` e `checkedEntries`. Não altera dados. Uma divergência retorna 200 com `consistent: false`, gera log JSON sem valores financeiros e incrementa `wallet_reconciliation_mismatches_total`, exposto em `/metrics`. Aceita `X-Correlation-Id` opcional (até 128 letras, dígitos, pontos, underscores, dois-pontos ou hífens); quando ausente, gera um UUID.
+
+A métrica conta verificações com divergência por processo, sem labels por wallet, e reinicia com o processo. A instrumentação completa do desafio será adicionada na etapa de observabilidade.

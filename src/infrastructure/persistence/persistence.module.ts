@@ -5,9 +5,23 @@ import { connectDatabase } from './database';
 import { PostgresWalletRepository } from './repositories/postgres-wallet.repository';
 import { WageringUnitOfWork } from '../../application/ports/wagering-unit-of-work';
 import { PostgresWageringUnitOfWork } from './repositories/postgres-wagering-unit-of-work';
+import { WalletReadRepository } from '../../application/ports/wallet-read.repository';
+import { WagerReadRepository } from '../../application/ports/wager-read.repository';
+import { PostgresWalletReadRepository } from './repositories/postgres-wallet-read.repository';
+import { PostgresWagerReadRepository } from './repositories/postgres-wager-read.repository';
 
 @Module({
   providers: [
+    {
+      provide: WalletReadRepository,
+      useFactory: (orm: MikroORM) => new PostgresWalletReadRepository(orm),
+      inject: [MikroORM],
+    },
+    {
+      provide: WagerReadRepository,
+      useFactory: (orm: MikroORM) => new PostgresWagerReadRepository(orm),
+      inject: [MikroORM],
+    },
     {
       provide: WageringUnitOfWork,
       useFactory: (orm: MikroORM) => new PostgresWageringUnitOfWork(orm),
@@ -20,7 +34,12 @@ import { PostgresWageringUnitOfWork } from './repositories/postgres-wagering-uni
       inject: [MikroORM],
     },
   ],
-  exports: [WalletRepository, WageringUnitOfWork],
+  exports: [
+    WalletRepository,
+    WageringUnitOfWork,
+    WalletReadRepository,
+    WagerReadRepository,
+  ],
 })
 export class PersistenceModule implements OnApplicationShutdown {
   constructor(@Inject(MikroORM) private readonly orm: MikroORM) {}

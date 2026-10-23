@@ -2,7 +2,7 @@
 
 ## Escopo atual
 
-Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas restantes, reconciliação, inbox, outbox e mensageria ainda estão pendentes.
+Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas de transações, ledger paginado e reconciliação estão implementados. Inbox, outbox, mensageria, health checks e a instrumentação restante estão pendentes.
 
 ## Organização
 
@@ -106,3 +106,25 @@ Cada instância consulta até 50 candidatas por execução. A seleção não blo
 Os testes incluem referências anteriores à BET, dois recuperadores concorrentes, persistência do backoff, expiração sem sleeps longos, falha e rollback durante recuperação e execução real do timer. A recuperação após reconexão não substitui os futuros testes de morte forçada de processos.
 
 Eventos e outbox ainda não fazem parte do processamento: esta é uma etapa intermediária e não atende à garantia final de não perder eventos após commit. A emissão do evento de rejeição por expiração também depende dessa próxima etapa.
+
+## Consultas e paginação do ledger
+
+As leituras possuem repositories próprios, que retornam projeções sem expor EntityManager ou entidades gerenciadas. Os casos de uso de escrita continuam usando suas fronteiras transacionais; a separação evita que consultas dependam de operações de persistência de agregados. Não há infraestrutura adicional de CQRS, cache ou banco separado.
+
+A consulta por provedor usa conjuntamente providerId e externalTransactionId. A projeção inclui status, referência, failureCode e o snapshot do resultado original; alterações posteriores no saldo não afetam esse snapshot. Hash e idempotency key ficam internos.
+
+A migration 4 acrescenta `sequence_number`, bigint gerado pelo PostgreSQL, ao ledger. Ela fornece uma ordenação única por wallet sem depender de precisão de timestamps ou ordem aleatória de UUIDs. O campo técnico não altera a entidade de domínio e é lido como string, preservando valores além de Number.MAX_SAFE_INTEGER. A identidade pode ter lacunas após rollback; continuidade numérica não é um requisito.
+
+A primeira página captura a maior sequência visível. Cursor versionado em base64url carrega a wallet, a última posição e esse limite superior. As páginas seguintes usam keyset pagination, nunca offset. Cada leitura roda em REPEATABLE READ e somente leitura; a primeira captura e a seleção de entradas compartilham um snapshot. Escritas da aplicação são serializadas por wallet, de modo que a sequência acompanha sua ordem de inserção/commit. Novas movimentações ficam acima do limite e aparecem em uma nova paginação.
+
+O cursor é validado quanto a versão, escopo, formato e limites de bigint. Ele não é uma credencial nem um mecanismo de autorização; não contém segredos e não é assinado. Consumidores devem tratá-lo como opaco. Uma reversão de migration que recrie as sequências invalida cursors anteriores.
+
+## Reconciliação e métrica de divergências
+
+O repository faz uma única consulta agregada, usando o mesmo snapshot MVCC para saldo armazenado e ledger. Isso evita comparar um saldo anterior a um commit com lançamentos posteriores. A aritmética usa numeric do PostgreSQL e devolve strings decimais em escala 2; nenhum valor financeiro passa por number. A projeção não precisa construir um Money limitado ao saldo máximo para representar uma possível divergência em dados corrompidos.
+
+A diferença é armazenado menos calculado. Saldo inicial positivo entra na soma via OPENING. Wallet vazia calcula 0.00 e zero entradas. A consulta não adquire lock de escrita nem altera ou corrige registros. O custo é percorrer as entradas da wallet, aceitável para a reconciliação explícita do desafio.
+
+Uma diferença gera resposta `consistent: false`, log JSON com walletId e correlationId sem valores financeiros e incremento de wallet_reconciliation_mismatches_total. O cliente [@prometheus-io/client](https://github.com/prometheus/client_js) fornece Counter e Registry; usamos um registry por aplicação para evitar estado global compartilhado nos testes. A métrica é exposta em GET /metrics, sem labels por wallet para limitar cardinalidade. O contador é local ao processo e conta cada verificação divergente; um coletor poderá acompanhar cada instância. As outras métricas obrigatórias ainda não foram implementadas.
+
+O teste de divergência desabilita temporariamente o trigger de proteção apenas em um banco criado exclusivamente pelo teste, injeta inconsistência e comprova resposta, log, métrica e ausência de correção automática. Os demais testes mantêm as proteções habilitadas. Também há testes de paginação durante novas movimentações, isolamento de consultas por provedor e reconciliação durante débitos concorrentes.

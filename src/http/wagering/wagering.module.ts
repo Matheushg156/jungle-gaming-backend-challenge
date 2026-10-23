@@ -6,10 +6,11 @@ import { ProviderIdentityGuard } from '../provider-identity.guard';
 import { WageringController } from './wagering.controller';
 import { RetryPendingReferences } from '../../application/wagering/retry-pending-references';
 import { ReferenceRecoveryWorker } from '../../infrastructure/workers/reference-recovery.worker';
+import { ProviderTransactionsController } from './provider-transactions.controller';
 
 @Module({
   imports: [PersistenceModule],
-  controllers: [WageringController],
+  controllers: [WageringController, ProviderTransactionsController],
   providers: [
     ProviderIdentityGuard,
     ReferenceRecoveryWorker,

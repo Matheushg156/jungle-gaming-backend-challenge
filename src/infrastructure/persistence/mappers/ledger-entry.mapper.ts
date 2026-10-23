@@ -3,7 +3,7 @@ import type { WalletLedgerEntryRecord } from '../schemas/wallet-ledger-entry.sch
 
 export function toLedgerRecord(
   entry: WalletLedgerEntry,
-): WalletLedgerEntryRecord {
+): Omit<WalletLedgerEntryRecord, 'sequenceNumber'> {
   return {
     id: entry.id,
     walletId: entry.walletId,

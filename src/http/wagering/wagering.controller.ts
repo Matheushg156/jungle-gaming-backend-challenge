@@ -2,6 +2,9 @@ import {
   Body,
   Controller,
   Headers,
+  Get,
+  Param,
+  ParseUUIDPipe,
   Inject,
   Post,
   Res,
@@ -13,6 +16,7 @@ import { WagerTransactionStatus } from '../../domain/entities/wager-transaction'
 import { DomainError } from '../../domain/errors/domain-error';
 import { ProviderIdentityGuard } from '../provider-identity.guard';
 import { SubmitWagerDto } from './submit-wager.dto';
+import { WagerReadRepository } from '../../application/ports/wager-read.repository';
 
 interface HttpStatusResponse {
   status(code: number): unknown;
@@ -21,7 +25,21 @@ interface HttpStatusResponse {
 @Controller('wagering/transactions')
 @UseGuards(ProviderIdentityGuard)
 export class WageringController {
-  constructor(@Inject(SubmitWager) private readonly submitWager: SubmitWager) {}
+  constructor(
+    @Inject(SubmitWager) private readonly submitWager: SubmitWager,
+    @Inject(WagerReadRepository) private readonly wagers: WagerReadRepository,
+  ) {}
+
+  @Get(':transactionId')
+  async findById(
+    @Param('transactionId', new ParseUUIDPipe()) transactionId: string,
+  ) {
+    const transaction = await this.wagers.findById(transactionId);
+    if (!transaction) {
+      throw new DomainError('TRANSACTION_NOT_FOUND', 'Transaction not found');
+    }
+    return transaction;
+  }
 
   @Post()
   async submit(

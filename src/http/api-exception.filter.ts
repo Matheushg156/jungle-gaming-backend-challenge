@@ -22,7 +22,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       ];
       const status = conflicts.includes(error.code)
         ? 409
-        : error.code === 'WALLET_NOT_FOUND'
+        : ['WALLET_NOT_FOUND', 'TRANSACTION_NOT_FOUND'].includes(error.code)
           ? 404
           : 400;
       response
