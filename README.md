@@ -147,7 +147,7 @@ A métrica conta verificações com divergência por processo, sem labels por wa
 
 A operação financeira e seus eventos são confirmados juntos no PostgreSQL. O publisher lê apenas registros confirmados e envia para `wager-events.fifo`, criada pelo hook de inicialização do LocalStack. A entrada usa `wager-transactions.fifo`, com `wager-transactions-dlq.fifo` como DLQ. O hook cria as três filas e configura redrive com cinco recebimentos.
 
-Eventos: WagerTransactionProcessed (inclusive LOSS e OPENING), WagerTransactionRejected, WagerTransactionPendingReference e WalletBalanceChanged. O envelope inclui eventId, aggregateId, correlationId, causationId, occurredAt, version e data. Valores monetários continuam sendo strings.
+Eventos: WagerTransactionProcessed (inclusive LOSS e OPENING), WagerTransactionRejected, WagerTransactionPendingReference, WalletBalanceChanged e WagerTransactionFailed (falha permanente de uma operação já aceita). O envelope inclui eventId, aggregateId, correlationId, causationId, occurredAt, version e data. Valores monetários continuam sendo strings.
 
 O publisher roda a cada segundo, em lotes de até 10 mensagens, sem bloquear wallets. Falhas de envio mantêm a mensagem pendente, com backoff de 1 segundo até 5 minutos e sem descarte por limite de tentativas. `OUTBOX_PUBLISHER_ENABLED=false` desativa o agendamento, preservando os eventos para publicação posterior.
 
@@ -189,7 +189,7 @@ Envie para a fila de entrada este envelope, substituindo playerId e walletId pel
 
 Processadas, rejeitadas por negócio e PENDING_REFERENCE recebem ack após commit. Falhas transitórias tentam novamente após 1, 2, 4 e 8 segundos; no quinto recebimento vão para a DLQ. Payload inválido ou conflito permanente vai diretamente para a DLQ. O corpo original é preservado com atributos failureCode, receiveCount, consumerName e sourceMessageId. Corrija a causa antes de reenviar: a identidade de uma operação confirmada não pode ser reutilizada com dados diferentes.
 
-O consumidor faz long polling de dois segundos, uma mensagem por vez por instância, com visibilidade de 60 segundos. Instâncias adicionais trabalham em paralelo. Em SIGTERM, interrompe o receive e aguarda o processamento e ack da mensagem em andamento antes de fechar os clientes.
+O consumidor faz long polling de dois segundos, uma mensagem por vez por instância, com visibilidade padrão de 60 segundos (`SQS_VISIBILITY_TIMEOUT_SECONDS`, inteiro entre 1 e 43200). Instâncias adicionais trabalham em paralelo. Em SIGTERM, interrompe o receive e aguarda o processamento e ack da mensagem em andamento antes de fechar os clientes.
 
 ## Health checks e observabilidade
 
@@ -231,5 +231,15 @@ Esse teste usa as mesmas configurações TEST_DATABASE_URL e TEST_SQS_ENDPOINT d
 - Autenticação externa foi omitida conforme permitido pelo enunciado; ProviderIdentityGuard é o ponto de extensão. Não use o serviço publicamente sem integrar o IdP.
 - Não foram implementados os diferenciais opcionais: teste de carga, OpenTelemetry, dashboard e ledger de partidas dobradas.
 - A DLQ exige análise e reenvio operacional. A visibilidade de entrada não possui heartbeat; inbox e locks protegem contra efeito financeiro duplicado quando houver redelivery.
-- FAILED existe como estado terminal no domínio e schema. Erros que impedem a aceitação atômica não deixam transação financeira confirmada; falhas permanentes de entrada ficam auditadas na DLQ. Não existe um fluxo separado que persista uma aceitação e depois a marque FAILED.
+- FAILED é persistido quando uma operação já aceita como PENDING_REFERENCE sofre uma falha permanente de integridade na recuperação. Erros anteriores à aceitação atômica não criam uma transação financeira artificial e ficam auditados na DLQ.
 - O Compose executa PostgreSQL e LocalStack; a aplicação roda pelo Bun no host. Filas locais são efêmeras, enquanto o PostgreSQL de desenvolvimento usa volume persistente. Após recriar o LocalStack, o publisher retoma eventos ainda pendentes no banco; eventos já marcados como publicados não são republicados automaticamente.
+
+## Falhas permanentes de operações aceitas
+
+Na recuperação de referências, erros determinísticos de persistência (SQLSTATE 23502, 23503, 23514, 22001 e 22003) causam rollback da tentativa financeira. Em outra transação, o worker bloqueia a wallet, relê a operação e, se ela ainda estiver PENDING_REFERENCE, confirma FAILED com `failureCode: PERSISTENCE_INTEGRITY_FAILURE`, snapshot do resultado, fim da agenda de recuperação e evento WagerTransactionFailed na outbox. Essa segunda transação não altera saldo nem cria lançamento.
+
+Se outro worker já concluiu a operação, seu resultado é preservado. Se o registro da falha ou seu evento não puderem ser confirmados, a operação continua pendente para recuperação posterior. Deadlocks, timeouts, falhas de conexão e erros desconhecidos continuam transitórios; esgotamento do TTL da referência continua sendo REJECTED / REFERENCE_NOT_FOUND.
+
+Uma submissão HTTP que repete uma operação FAILED retorna HTTP 500 com o snapshot original, failureCode e idempotentReplay: true. Reenviar a mesma key não tenta movimentar saldo novamente. Uma redelivery SQS já aceita retorna o mesmo resultado e recebe ack, pois a falha terminal já está auditada. Investigue e corrija a causa antes de definir operacionalmente uma nova tentativa de negócio.
+
+Os testes `permanent-failures.test.ts`, `inbox.test.ts` e `sqs-reversal-restart.test.ts` comprovam a diferença entre erro pré-aceitação e falha de operação aceita, atomicidade do registro FAILED/evento, concorrência, replay e recuperação de REFUND/ROLLBACK por SQS após SIGKILL. O roteiro para apresentação está em [PRESENTATION.md](PRESENTATION.md).

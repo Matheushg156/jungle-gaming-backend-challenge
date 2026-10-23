@@ -66,7 +66,9 @@ export class WageringController {
     const result = await this.submitWager.execute(input, key, {
       correlationId: readCorrelationId(correlationId),
     });
-    if (result.status === WagerTransactionStatus.Rejected) {
+    if (result.status === WagerTransactionStatus.Failed) {
+      response.status(500);
+    } else if (result.status === WagerTransactionStatus.Rejected) {
       response.status(422);
     } else if (result.status === WagerTransactionStatus.PendingReference) {
       response.status(202);

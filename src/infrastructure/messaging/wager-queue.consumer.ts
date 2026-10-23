@@ -1,3 +1,4 @@
+import { PermanentPersistenceError } from '../../application/ports/permanent-persistence-error';
 import type { ProcessingObserver } from '../../application/ports/processing-observer';
 import { createHash } from 'node:crypto';
 import {
@@ -17,7 +18,11 @@ export function classifyQueueError(error: unknown): {
   permanent: boolean;
   code: string;
 } {
-  if (error instanceof DomainError || error instanceof InvalidQueueMessage) {
+  if (
+    error instanceof DomainError ||
+    error instanceof InvalidQueueMessage ||
+    error instanceof PermanentPersistenceError
+  ) {
     return { permanent: true, code: error.code };
   }
   // Integrity errors cannot be repaired by retrying the same payload.
@@ -59,6 +64,15 @@ export class WagerQueueConsumer {
     this.waitTimeSeconds = options.waitTimeSeconds ?? 2;
     this.visibilitySeconds = options.visibilitySeconds ?? 60;
     this.maxAttempts = options.maxAttempts ?? 5;
+    if (
+      !Number.isInteger(this.visibilitySeconds) ||
+      this.visibilitySeconds < 1 ||
+      this.visibilitySeconds > 43200
+    ) {
+      throw new Error(
+        'Consumer visibilitySeconds must be an integer between 1 and 43200',
+      );
+    }
     if (
       !Number.isInteger(this.maxAttempts) ||
       this.maxAttempts < 1 ||

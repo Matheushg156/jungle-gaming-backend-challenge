@@ -8,6 +8,7 @@ import {
 import type { IntegrationEvent } from '../../domain/events/integration-event';
 import {
   WagerTransactionProcessed,
+  WagerTransactionFailed,
   WagerTransactionRejected,
   WagerTransactionPendingReference,
 } from '../../domain/events/wager-transaction-events';
@@ -32,6 +33,8 @@ export function createWagerEvents(
     events.push(WagerTransactionProcessed.from(transaction, wallet, context()));
   } else if (transaction.status === WagerTransactionStatus.Rejected) {
     events.push(WagerTransactionRejected.from(transaction, wallet, context()));
+  } else if (transaction.status === WagerTransactionStatus.Failed) {
+    events.push(WagerTransactionFailed.from(transaction, wallet, context()));
   } else if (
     transaction.status === WagerTransactionStatus.PendingReference &&
     previousStatus !== transaction.status

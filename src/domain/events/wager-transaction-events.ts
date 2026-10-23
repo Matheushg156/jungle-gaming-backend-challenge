@@ -118,3 +118,21 @@ export class WagerTransactionPendingReference extends IntegrationEvent<WagerEven
     );
   }
 }
+
+export class WagerTransactionFailed extends IntegrationEvent<WagerEventData> {
+  readonly eventType = 'WagerTransactionFailed';
+  readonly version = 1;
+  private constructor(props: IntegrationEventProps<WagerEventData>) {
+    super(props);
+  }
+
+  static from(
+    transaction: WagerTransaction,
+    wallet: Wallet,
+    context: EventContext,
+  ): WagerTransactionFailed {
+    return new WagerTransactionFailed(
+      eventProps(transaction, wallet, context, WagerTransactionStatus.Failed),
+    );
+  }
+}

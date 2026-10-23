@@ -1,3 +1,6 @@
+import { RetryPendingReferences } from '../../src/application/wagering/retry-pending-references';
+import { PublishOutbox } from '../../src/application/events/publish-outbox';
+import { PostgresOutboxRepository } from '../../src/infrastructure/persistence/repositories/postgres-outbox.repository';
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
 import { rejects } from 'node:assert/strict';
@@ -433,4 +436,99 @@ describe('Persistent inbox and real SQS consumption', () => {
       await child.exited;
     }
   }, 15000);
+  test('permanent failure before acceptance goes to DLQ without inventing a FAILED transaction', async () => {
+    const message = await envelope();
+    await database.orm.em.execute(`
+      create function fail_initial_integrity() returns trigger language plpgsql as $$
+      begin raise exception 'injected integrity failure' using errcode = '23514'; end $$;
+      create trigger fail_initial_integrity before insert on wallet_ledger_entries for each row execute function fail_initial_integrity();
+    `);
+    await send(message);
+    expect(await consumer.processNext()).toMatchObject({
+      outcome: 'DEAD_LETTERED',
+      code: 'PERSISTENCE_INTEGRITY_FAILURE',
+    });
+    expect(
+      (await deadLetter())?.MessageAttributes?.failureCode?.StringValue,
+    ).toBe('PERSISTENCE_INTEGRITY_FAILURE');
+    expect(
+      await database.orm.em.fork().count(WagerTransactionSchema, {
+        idempotencyKey: message.data.idempotencyKey,
+      }),
+    ).toBe(0);
+    await assertFinancialState(message.data.walletId, '100.00', 0, 1);
+  });
+
+  test('an accepted SQS reversal can fail permanently, publish its audit event and safely replay', async () => {
+    const bet = await envelope();
+    const reversal = {
+      ...bet,
+      messageId: randomUUID(),
+      correlationId: 'failed-sqs',
+      data: {
+        ...bet.data,
+        externalTransactionId: randomUUID(),
+        idempotencyKey: randomUUID(),
+        kind: WagerTransactionKind.Refund,
+        referenceExternalTransactionId: bet.data.externalTransactionId,
+      },
+    };
+    await send(reversal);
+    expect((await consumer.processNext()).outcome).toBe('ACKNOWLEDGED');
+    await send(bet);
+    expect((await consumer.processNext()).outcome).toBe('ACKNOWLEDGED');
+    const pending = await database.orm.em
+      .fork()
+      .findOneOrFail(WagerTransactionSchema, {
+        idempotencyKey: reversal.data.idempotencyKey,
+      });
+    await database.orm.em.execute(`
+      create function fail_sqs_recovery() returns trigger language plpgsql as $$
+      begin raise exception 'injected recovery integrity failure' using errcode = '23514'; end $$;
+      create trigger fail_sqs_recovery before insert on wallet_ledger_entries for each row execute function fail_sqs_recovery();
+    `);
+    await new RetryPendingReferences(
+      new PostgresWageringUnitOfWork(database.orm),
+    ).execute(new Date(pending.createdAt.getTime() + 2000));
+    expect(
+      (
+        await database.orm.em
+          .fork()
+          .findOneOrFail(WagerTransactionSchema, { id: pending.id })
+      ).status,
+    ).toBe(WagerTransactionStatus.Failed);
+    await send(reversal);
+    expect((await consumer.processNext()).outcome).toBe('ACKNOWLEDGED');
+    await assertFinancialState(bet.data.walletId, '90.00', 2, 2);
+    const events = await createTestQueue();
+    try {
+      expect(
+        (
+          await new PublishOutbox(
+            new PostgresOutboxRepository(database.orm),
+            events.publisher,
+          ).execute()
+        ).published,
+      ).toBe(6);
+      const published = await events.receiveAll(6);
+      expect(
+        published.filter(
+          (event) => event.eventType === 'WagerTransactionFailed',
+        ),
+      ).toHaveLength(1);
+      expect(
+        published.find((event) => event.eventType === 'WagerTransactionFailed'),
+      ).toMatchObject({
+        correlationId: 'failed-sqs',
+        causationId: reversal.messageId,
+        data: {
+          transactionId: pending.id,
+          failureCode: 'PERSISTENCE_INTEGRITY_FAILURE',
+        },
+      });
+      expect(await deadLetter()).toBeUndefined();
+    } finally {
+      await events.close();
+    }
+  });
 });

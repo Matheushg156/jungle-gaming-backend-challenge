@@ -72,18 +72,19 @@ O resultado é persistido em JSONB na mesma transação do débito/crédito e le
 
 ## Respostas e falhas atuais
 
-| Situação                                                     | HTTP / código                       |
-| ------------------------------------------------------------ | ----------------------------------- |
-| BET, WIN ou LOSS processada; replay de processamento         | 200                                 |
-| Referência ausente ou ainda pendente                         | 202 / PENDING_REFERENCE             |
-| Payload ou key inválida, operação fora do escopo atual       | 400                                 |
-| Wallet inexistente                                           | 404 / WALLET_NOT_FOUND              |
-| Mesma key com outro payload                                  | 409 / IDEMPOTENCY_CONFLICT          |
-| Identificador externo já usado com outra key                 | 409 / EXTERNAL_TRANSACTION_CONFLICT |
-| Corrida de identidade detectada pela constraint              | 409 / TRANSACTION_IDENTITY_CONFLICT |
-| Rejeição persistida por regra de negócio; replay de rejeição | 422                                 |
-| Timeout de lock ou indisponibilidade transitória do banco    | 503 / DATABASE_UNAVAILABLE          |
-| Falha inesperada de persistência                             | 500 / INTERNAL_ERROR                |
+| Situação                                                     | HTTP / código                          |
+| ------------------------------------------------------------ | -------------------------------------- |
+| BET, WIN ou LOSS processada; replay de processamento         | 200                                    |
+| Referência ausente ou ainda pendente                         | 202 / PENDING_REFERENCE                |
+| Payload ou key inválida, operação fora do escopo atual       | 400                                    |
+| Wallet inexistente                                           | 404 / WALLET_NOT_FOUND                 |
+| Mesma key com outro payload                                  | 409 / IDEMPOTENCY_CONFLICT             |
+| Identificador externo já usado com outra key                 | 409 / EXTERNAL_TRANSACTION_CONFLICT    |
+| Corrida de identidade detectada pela constraint              | 409 / TRANSACTION_IDENTITY_CONFLICT    |
+| Rejeição persistida por regra de negócio; replay de rejeição | 422                                    |
+| Timeout de lock ou indisponibilidade transitória do banco    | 503 / DATABASE_UNAVAILABLE             |
+| Replay de operação FAILED                                    | 500 / snapshot FAILED, com failureCode |
+| Falha inesperada de persistência                             | 500 / INTERNAL_ERROR                   |
 
 Rejeições atuais incluem INSUFFICIENT_FUNDS, PLAYER_MISMATCH, CURRENCY_MISMATCH, BALANCE_LIMIT_EXCEEDED, REFERENCE_MISMATCH, REFERENCE_NOT_PROCESSED e INVALID_REFERENCE_KIND. Nenhuma altera saldo ou cria ledger. Erros do driver são convertidos sem expor SQL ou parâmetros. Reversões acrescentam REFERENCE_ALREADY_REVERSED, REVERSAL_AMOUNT_MISMATCH e REVERSAL_INSUFFICIENT_FUNDS. A expiração de uma referência ainda indisponível usa REFERENCE_NOT_FOUND.
 
@@ -159,9 +160,9 @@ Uma PENDING_REFERENCE já aceita recebe inbox processada e ack; a recuperação 
 
 O ack usa o receipt handle da entrega e ocorre após o retorno do commit. A visibilidade é alterada por mensagem para retry; veja [ChangeMessageVisibility](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ChangeMessageVisibility.html). Para DLQ, primeiro confirma o envio do corpo original e atributos de diagnóstico, depois remove a origem. Falha no envio ou no ack deixa a origem recuperável. O deduplicationId do encaminhamento deriva da fila e do ID do broker; a janela FIFO é limitada, portanto ferramentas de operação devem tolerar duplicatas na DLQ. A fila de origem também tem redrive nativo com cinco recebimentos como proteção quando um consumidor não consegue finalizar o encaminhamento.
 
-Uma mensagem inválida ou uma transação cujo commit foi revertido não produz um registro financeiro FAILED artificial. A evidência permanente fica na DLQ; FAILED continua reservado a uma operação financeira aceita que sofra uma transição permanente explícita. Não há descarte silencioso. DLQ requer inspeção e reenvio operacional; não há redrive automático para repetir erros permanentes.
+Uma mensagem inválida ou uma nova submissão cujo commit foi revertido não produz um registro financeiro FAILED artificial. A evidência permanente da entrada fica na DLQ. Uma operação anteriormente aceita como PENDING_REFERENCE pode transicionar para FAILED durante a recuperação, conforme a política abaixo. Não há descarte silencioso. DLQ requer inspeção e reenvio operacional; não há redrive automático para repetir erros permanentes.
 
-O worker usa long polling de dois segundos, recebe uma mensagem por chamada e não sobrepõe processamento local. Outros processos consomem em paralelo, e a correção permanece no PostgreSQL. A visibilidade padrão de 60 segundos excede os timeouts SQL por comando, mas não é um lease renovado por heartbeat. Se uma operação exceder esse período, pode ocorrer consumo concorrente: inbox e wallet locks preservam efeito único. Isso pode aumentar a contenção e antecipar redrive; heartbeat e ajuste de visibilidade são evolução operacional para workloads lentos.
+O worker usa long polling de dois segundos, recebe uma mensagem por chamada e não sobrepõe processamento local. Outros processos consomem em paralelo, e a correção permanece no PostgreSQL. A visibilidade padrão de 60 segundos, configurável por SQS_VISIBILITY_TIMEOUT_SECONDS, excede os timeouts SQL por comando, mas não é um lease renovado por heartbeat. Se uma operação exceder esse período, pode ocorrer consumo concorrente: inbox e wallet locks preservam efeito único. Isso pode aumentar a contenção e antecipar redrive; heartbeat e ajuste de visibilidade são evolução operacional para workloads lentos.
 
 No shutdown, o AbortController cancela somente ReceiveMessage. SQL, encaminhamento e ack de uma mensagem já recebida continuam até terminar; beforeApplicationShutdown aguarda o loop antes de fechar banco e cliente SQS. SIGKILL é recuperado pela expiração de visibilidade. Os testes usam banco e filas exclusivos, comprovam retry/DLQ, rollback conjunto, identidade divergente, 50 mensagens duplicadas em três processos, SIGKILL no intervalo após commit antes de ack e SIGTERM durante uma operação em andamento. A soma do ledger é verificada contra o saldo nesses cenários.
 
@@ -180,3 +181,17 @@ Outbox lag e quantidade pendente são consultados no banco no scrape. O lag usa 
 Os logs JSON possuem timestamp e nível. A entrada HTTP registra resultado, handler e correlationId, sem corpo, query string ou headers completos. O mesmo ID segue para as operações e eventos. Processamento financeiro adiciona walletId, transactionId, providerId e messageId quando disponíveis. IDs não viram labels Prometheus, evitando cardinalidade por usuário/wallet. O logger Nest seleciona campos conhecidos de objetos; não serializa exceções de driver, SQL ou parâmetros. O consumer registra resultados e motivos sem o corpo da mensagem.
 
 Os testes verificam readiness saudável e degradado, liveness independente, métricas após commit/replay/rollback, conflitos SQL, retentativas de referência, retry/DLQ, backlog antes e depois da publicação e ausência de IDs nas labels. Um publisher Bun é morto por SIGKILL após o commit financeiro e antes da publicação; outro processo publica o evento preservado. O smoke test usa dist/main.js, habilita os três workers e verifica HTTP, entrada e saída SQS, reconciliação, logs JSON e SIGTERM.
+
+## FAILED: auditoria após rollback da recuperação
+
+FAILED identifica uma falha permanente de infraestrutura de uma operação já aceita. A aplicação não separa a aceitação da primeira tentativa financeira: uma submissão nova confirma todos os efeitos ou nenhum. O fluxo que possui aceitação durável antes de uma tentativa posterior é PENDING_REFERENCE. Por isso FAILED é aplicado nessa recuperação, sem criar aceitação artificial para mensagens inválidas ou falhas de inserção inicial.
+
+O adapter da unidade de trabalho traduz somente SQLSTATE 23502 (not null), 23503 (foreign key), 23514 (check), 22001 (comprimento) e 22003 (faixa numérica) para PermanentPersistenceError após o rollback. Essa exceção pertence ao contrato de aplicação e não transporta SQL nem parâmetros. Unicidade mantém a política de conflito existente; deadlock, serialização, timeout, conexão e erros desconhecidos não são classificados como permanentes por esse mecanismo. A classificação pressupõe que repetir os mesmos dados sob o mesmo schema não corrigirá essas violações; sua causa exige investigação operacional.
+
+RetryPendingReferences captura a falha permanente e abre uma nova unidade de trabalho. Reobtém o lock da wallet, relê a operação e só chama fail se ela ainda estiver PENDING_REFERENCE. Uma resolução concorrente terminal prevalece. O registro FAILED, o snapshot com PERSISTENCE_INTEGRITY_FAILURE, a remoção da próxima tentativa e WagerTransactionFailed são confirmados juntos. O adapter reconstrói a wallet a partir do banco após o rollback, impedindo que o saldo mutado em memória na tentativa anterior vaze para o snapshot de falha. Não existe lançamento financeiro nessa transação.
+
+WagerTransactionFailed é um evento adicional aos quatro eventos mínimos, com envelope versionado e a correlação/causação originais. Sua publicação usa a mesma outbox. Se a própria auditoria falhar, toda a segunda transação também reverte e a operação aceita continua pendente; o worker reporta a falha e tenta novamente depois. A observabilidade só conta FAILED depois do commit, pela mesma instrumentação de transições financeiras.
+
+O resultado terminal permanece idempotente. HTTP retorna 500 com o snapshot persistido para replay de FAILED, em vez de indicar sucesso 200; a consulta GET continua retornando o recurso com status FAILED. No SQS, uma redelivery dessa operação aceita recebe ack após o replay transacional da inbox. Esgotamento de tentativas de transporte não é automaticamente FAILED: uma entrega pode não ter aceitação financeira e seu destino continua sendo DLQ. Expiração da referência continua sendo uma rejeição de negócio explícita.
+
+Os testes injetam falha determinística no lançamento de uma reversão já aceita e confirmam rollback de saldo/ledger antes de FAILED; também verificam falha no evento de auditoria, erro transitório recuperável, dois recuperadores concorrentes, imutabilidade SQL e replay com saldo original após novos créditos. O cenário SQS publica o evento adicional no LocalStack real. Dois testes de reinício enviam REFUND ou ROLLBACK antes da BET, esperam aceitação/inbox, matam o primeiro processo, iniciam outro com os workers reais, redeliveram a operação e conferem efeitos/eventos únicos e saldo igual à soma do ledger por uma nova conexão.

@@ -1,3 +1,4 @@
+import { PermanentPersistenceError } from '../../../application/ports/permanent-persistence-error';
 import type { ProcessingObserver } from '../../../application/ports/processing-observer';
 import { InboxMessage } from '../../../domain/entities/inbox-message';
 import { InboxMessageSchema } from '../schemas/inbox-message.schema';
@@ -255,6 +256,11 @@ export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
           'TRANSACTION_IDENTITY_CONFLICT',
           'Idempotency key or provider transaction already exists',
         );
+      }
+      // Do not classify deadlocks, connection failures, unknown errors or
+      // uniqueness races as deterministic failures of an accepted operation.
+      if (['23502', '23503', '23514', '22001', '22003'].includes(code)) {
+        throw new PermanentPersistenceError();
       }
       throw error;
     }

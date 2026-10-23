@@ -21,7 +21,11 @@ import { WagerQueueConsumer } from './wager-queue.consumer';
           process.env.SQS_TRANSACTIONS_DLQ_URL ??
             'http://localhost:4566/queue/us-east-1/000000000000/wager-transactions-dlq.fifo',
           submit,
-          {},
+          {
+            visibilitySeconds: Number(
+              process.env.SQS_VISIBILITY_TIMEOUT_SECONDS ?? '60',
+            ),
+          },
           observer,
         ),
       inject: [SubmitWager, ProcessingObserver],

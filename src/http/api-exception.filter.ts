@@ -1,3 +1,4 @@
+import { PermanentPersistenceError } from '../application/ports/permanent-persistence-error';
 import { ArgumentsHost, Catch, ExceptionFilter, Logger } from '@nestjs/common';
 import { DriverException } from '@mikro-orm/core';
 import { DomainError } from '../domain/errors/domain-error';
@@ -7,11 +8,14 @@ interface ErrorResponse {
   json(body: unknown): void;
 }
 
-@Catch(DomainError, DriverException)
+@Catch(DomainError, DriverException, PermanentPersistenceError)
 export class ApiExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(ApiExceptionFilter.name);
 
-  catch(error: DomainError | DriverException, host: ArgumentsHost): void {
+  catch(
+    error: DomainError | DriverException | PermanentPersistenceError,
+    host: ArgumentsHost,
+  ): void {
     const response = host.switchToHttp().getResponse<ErrorResponse>();
     if (error instanceof DomainError) {
       const conflicts = [
