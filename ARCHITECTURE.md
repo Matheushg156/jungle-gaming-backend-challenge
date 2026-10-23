@@ -2,7 +2,7 @@
 
 ## Escopo atual
 
-Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. O processamento das apostas, inbox, outbox e mensageria ainda não foram implementados.
+Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. O processamento de BET, WIN e LOSS está disponível por HTTP, com idempotência persistente e lock por wallet. REFUND, ROLLBACK, reprocessamento de referências, inbox, outbox e mensageria ainda estão pendentes.
 
 ## Organização
 
@@ -22,7 +22,7 @@ Bun 1.x será usado para instalar dependências, executar a aplicação e rodar 
 
 MikroORM 6 foi escolhido por ser preferencial no enunciado e permitir explicitar a unidade transacional. Mapeamentos `EntitySchema` separados mantêm as classes do domínio livres de decorators e necessidades do ORM. Money usa `decimal.js`; os schemas usam `DecimalType` em modo string e `numeric(18,2)` no PostgreSQL, sem conversão monetária para `number`.
 
-A estratégia proposta é obter lock pessimista na linha da wallet dentro da transação SQL. Isso serializa operações da mesma wallet e permite paralelismo entre wallets distintas. O custo é a espera por lock em wallets muito disputadas. Testes com processos concorrentes deverão comprovar essa estratégia.
+O processamento usa `LockMode.PESSIMISTIC_WRITE` na linha da wallet, antes de ler e calcular o saldo, dentro de uma transação READ COMMITTED. Isso serializa operações da mesma wallet e permite paralelismo entre wallets distintas. O custo é a espera por lock em wallets muito disputadas. O limite de espera é 5 segundos, com timeout de statement de 15 segundos. Timeouts abortam a transação e retornam 503; o cliente pode reenviar a mesma key. Não há retry interno ilimitado.
 
 Cada chamada do repository cria um EntityManager com `fork()`, isolando Unit of Work e Identity Map. `transactional()` delimita o commit. A abertura persiste a wallet, a transação OPENING e o ledger com flushes explícitos para respeitar as foreign keys; flush não é commit. Falha em qualquer inserção reverte o conjunto. Saldo zero não gera OPENING. Inbox e outbox serão incluídos na fronteira transacional quando forem implementados.
 
@@ -30,21 +30,24 @@ As migrations são a fonte da verdade do schema: não usamos atualização autom
 
 O banco aplica unicidade por jogador/moeda, por key de idempotência global e por provedor/identificador externo. O ledger possui unicidade por wallet/transação, foreign keys que vinculam moeda e wallet, checks de aritmética e saldos não negativos e triggers que bloqueiam UPDATE, DELETE e TRUNCATE. O índice parcial de reversões permite no máximo uma reversão processada por referência e tipo.
 
-Um constraint trigger `DEFERRABLE INITIALLY DEFERRED` compara saldo e soma do ledger ao final da transação, obtendo lock apenas da wallet correspondente. É necessário adiar a checagem para permitir os estados intermediários entre os flushes. O custo é somar o ledger a cada checagem disparada; foi escolhido como proteção explícita nesta etapa e deverá ser avaliado com volumes maiores. A futura aplicação de apostas também deverá obter o lock antes de ler/calcular o saldo. O trigger não substitui essa estratégia.
+Um constraint trigger `DEFERRABLE INITIALLY DEFERRED` compara saldo e soma do ledger ao final da transação, obtendo lock apenas da wallet correspondente. É necessário adiar a checagem para permitir os estados intermediários entre os flushes. O custo é somar o ledger a cada checagem disparada; foi escolhido como proteção explícita nesta etapa e deverá ser avaliado com volumes maiores. A aplicação de apostas obtém o lock antes de ler/calcular o saldo. O trigger não substitui essa estratégia.
 
-Ainda falta validar no processamento a correspondência completa entre status, tipo, referência e lançamento. Os testes atuais de aberturas concorrentes não comprovam os cenários obrigatórios de apostas em três processos.
+A segunda migration vincula status e tipo ao ledger por triggers adiados: operações financeiras processadas exigem lançamento de mesmo valor e direção; LOSS e transações não processadas não podem ter lançamento. Identidade de jogador/moeda é validada para operações processadas, permitindo que rejeições preservem os valores enviados para auditoria. Estados terminais têm proteção contra alterações SQL. Validações completas de reversão ainda serão adicionadas com seu processamento.
+
+Os testes verificam 50 cópias da mesma aposta, duas apostas de 80 disputando 100 e processamento independente de outra wallet enquanto uma está bloqueada. Um cenário adicional usa três processos Bun independentes, com barreira de prontidão, para submeter 50 cópias e verificar débito único. Isso ainda não comprova crash recovery ou concorrência de workers SQS/outbox.
+
+O rollback da segunda migration remove o snapshot do resultado. Para preservar rejeições auditáveis que não combinam com a identidade da wallet, a FK composta anterior é restaurada como NOT VALID: ela volta a validar novas escritas, sem excluir registros existentes. Não é uma operação de rollback de aplicação sem perda de funcionalidade; migrations down são ferramentas de desenvolvimento e precisam ser avaliadas antes de uso em um banco com dados.
 
 ## Autenticação
 
-A integração com Identity Provider fica fora da implementação inicial, pois não pontua no desafio. O `ProviderIdentityGuard` é o ponto de extensão explícito e atualmente permite todas as requisições de wallets. Uma evolução poderá validar tokens OIDC de um IdP externo, associar a identidade autenticada ao providerId e proteger as rotas de negócio. Health checks permanecerão públicos. Não haverá armazenamento próprio de senhas.
+A integração com Identity Provider fica fora da implementação inicial, pois não pontua no desafio. O `ProviderIdentityGuard` é o ponto de extensão explícito e atualmente permite todas as requisições de wallets e apostas. Uma evolução poderá validar tokens OIDC de um IdP externo, associar a identidade autenticada ao providerId e proteger as rotas de negócio. Health checks permanecerão públicos. Não haverá armazenamento próprio de senhas.
 
 ## Decisões ainda pendentes
 
-- Resposta a conflito de identificador externo com outra key (ambos já têm unicidade no schema).
-- Tratamento de referências rejeitadas e recuperação de referências ainda não processadas.
+- Recuperação de referências ainda não processadas. Referência já rejeitada ou falha causa rejeição REFERENCE_NOT_PROCESSED.
 - Combinação de REFUND e ROLLBACK sobre a mesma referência.
 - Backoff e expiração de referências pendentes.
-- Taxonomia de falhas, status HTTP e destino dos eventos publicados pela outbox.
+- Extensão da taxonomia de falhas para reversões, expiração e mensageria; destino dos eventos da outbox.
 
 Essas decisões serão resolvidas antes das respectivas implementações e acompanhadas de testes.
 
@@ -62,4 +65,31 @@ Transações nascem PENDING e podem passar para PENDING_REFERENCE quando têm re
 
 REFUND aceita BET; ROLLBACK aceita BET, WIN ou REFUND e inverte sua direção. Reversões exigem valor integral. WIN e LOSS podem carregar referência a BET, sujeita às mesmas validações de identidade e estado; sem referência, não dependem de uma BET. BET não aceita referência. A decisão de aguardar ou rejeitar uma referência é responsabilidade do caso de uso, enquanto o domínio valida a referência resolvida.
 
-`assertReplay` identifica divergência de hash com `IDEMPOTENCY_CONFLICT`. O cálculo canônico do hash e a consulta persistente por key ainda serão implementados. As constraints iniciais de unicidade estão no PostgreSQL; o caso de uso de apostas ainda precisa implementar consulta, replay e tratamento dos conflitos entre processos. A rejeição de débito de reversão por saldo insuficiente deverá ser traduzida pelo caso de uso para um código distinto de `INSUFFICIENT_FUNDS`.
+## Idempotência e processamento
+
+`SubmitWager` contém as decisões de negócio; `WageringUnitOfWork` expõe apenas as operações que precisam compartilhar a mesma transação SQL e a wallet bloqueada. O adapter PostgreSQL implementa essa fronteira com EntityManager próprio. Mapeadores explícitos fazem a conversão entre registros e factories de domínio e são compartilhados com a abertura de wallet.
+
+A idempotency key vem exclusivamente do header e é global, com 1 a 255 caracteres ASCII imprimíveis sem espaços. Nunca é derivada nem substituída pelo identificador externo. `hashWagerPayload` usa SHA-256 sobre JSON UTF-8 com as chaves de negócio em ordem lexicográfica explícita, inclusive em `money`. A referência só entra quando fornecida. Headers, key, messageId e demais metadados de transporte são excluídos. Os valores não são normalizados: contratos exigem strings decimais em escala fixa.
+
+Uma leitura prévia pode devolver um replay já confirmado sem disputar o lock. Para uma nova submissão, a consulta é repetida após obter o lock, pois a primeira leitura não garante exclusividade. A unicidade no banco resolve disputas entre wallets diferentes. O mesmo identificador externo com outra key é conflito, mesmo quando o payload coincide.
+
+O resultado é persistido em JSONB na mesma transação do débito/crédito e ledger. O replay devolve esse snapshot, inclusive saldo, status e failureCode, alterando apenas idempotentReplay. Uma rejeição por saldo insuficiente continua rejeitada mesmo após novos créditos. Valores de saldo são strings também no JSONB.
+
+## Respostas e falhas atuais
+
+| Situação                                                     | HTTP / código                       |
+| ------------------------------------------------------------ | ----------------------------------- |
+| BET, WIN ou LOSS processada; replay de processamento         | 200                                 |
+| Referência ausente ou ainda pendente                         | 202 / PENDING_REFERENCE             |
+| Payload ou key inválida, operação fora do escopo atual       | 400                                 |
+| Wallet inexistente                                           | 404 / WALLET_NOT_FOUND              |
+| Mesma key com outro payload                                  | 409 / IDEMPOTENCY_CONFLICT          |
+| Identificador externo já usado com outra key                 | 409 / EXTERNAL_TRANSACTION_CONFLICT |
+| Corrida de identidade detectada pela constraint              | 409 / TRANSACTION_IDENTITY_CONFLICT |
+| Rejeição persistida por regra de negócio; replay de rejeição | 422                                 |
+| Timeout de lock ou indisponibilidade transitória do banco    | 503 / DATABASE_UNAVAILABLE          |
+| Falha inesperada de persistência                             | 500 / INTERNAL_ERROR                |
+
+Rejeições atuais incluem INSUFFICIENT_FUNDS, PLAYER_MISMATCH, CURRENCY_MISMATCH, BALANCE_LIMIT_EXCEEDED, REFERENCE_MISMATCH, REFERENCE_NOT_PROCESSED e INVALID_REFERENCE_KIND. Nenhuma altera saldo ou cria ledger. Erros do driver são convertidos sem expor SQL ou parâmetros. A taxonomia será estendida para distinguir saldo insuficiente em reversões.
+
+Referências ausentes já ficam persistidas como PENDING_REFERENCE, mas ainda não há worker para retentá-las. Eventos e outbox ainda não fazem parte do processamento: esta é uma etapa intermediária e não atende à garantia final de não perder eventos após commit.

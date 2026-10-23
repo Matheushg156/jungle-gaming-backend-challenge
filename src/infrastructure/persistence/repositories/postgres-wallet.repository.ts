@@ -6,7 +6,9 @@ import {
 } from '../../../application/ports/wallet.repository';
 import { Wallet } from '../../../domain/entities/wallet';
 import { DomainError } from '../../../domain/errors/domain-error';
-import { Money } from '../../../domain/value-objects/money';
+import { rehydrateWallet } from '../mappers/wallet.mapper';
+import { toWagerRecord } from '../mappers/wager-transaction.mapper';
+import { toLedgerRecord } from '../mappers/ledger-entry.mapper';
 import { WalletSchema } from '../schemas/wallet.schema';
 import { WagerTransactionSchema } from '../schemas/wager-transaction.schema';
 import { WalletLedgerEntrySchema } from '../schemas/wallet-ledger-entry.schema';
@@ -37,38 +39,9 @@ export class PostgresWalletRepository extends WalletRepository {
         await em.flush();
 
         if (transaction && ledgerEntry) {
-          em.create(WagerTransactionSchema, {
-            id: transaction.id,
-            providerId: transaction.providerId,
-            externalTransactionId: transaction.externalTransactionId,
-            idempotencyKey: transaction.idempotencyKey,
-            payloadHash: transaction.payloadHash,
-            walletId: transaction.walletId,
-            playerId: transaction.playerId,
-            roundId: transaction.roundId,
-            gameId: transaction.gameId,
-            kind: transaction.kind,
-            amount: transaction.money.toString(),
-            currency: transaction.money.currency,
-            status: transaction.status,
-            referenceExternalTransactionId: null,
-            referenceTransactionId: null,
-            failureCode: null,
-            createdAt: transaction.createdAt,
-            processedAt: transaction.processedAt ?? null,
-          });
+          em.create(WagerTransactionSchema, toWagerRecord(transaction, null));
           await em.flush();
-          em.create(WalletLedgerEntrySchema, {
-            id: ledgerEntry.id,
-            walletId: ledgerEntry.walletId,
-            transactionId: ledgerEntry.transactionId,
-            direction: ledgerEntry.direction,
-            amount: ledgerEntry.money.toString(),
-            currency: ledgerEntry.money.currency,
-            balanceBefore: ledgerEntry.balanceBefore.toString(),
-            balanceAfter: ledgerEntry.balanceAfter.toString(),
-            createdAt: ledgerEntry.createdAt,
-          });
+          em.create(WalletLedgerEntrySchema, toLedgerRecord(ledgerEntry));
           await em.flush();
         }
       });
@@ -97,12 +70,6 @@ export class PostgresWalletRepository extends WalletRepository {
       return null;
     }
 
-    return Wallet.rehydrate({
-      ...record,
-      balance: Money.rehydrate({
-        amount: record.balance,
-        currency: record.currency,
-      }),
-    });
+    return rehydrateWallet(record);
   }
 }

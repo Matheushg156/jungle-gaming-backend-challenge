@@ -9,6 +9,7 @@ import {
   WagerTransactionStatus,
 } from '../../src/domain/entities/wager-transaction';
 import { LedgerDirection } from '../../src/domain/entities/wallet-ledger-entry';
+import { createTestDatabase } from '../support/postgres-test-database';
 import { AppModule } from '../../src/app.module';
 import { OpenWallet } from '../../src/application/wallets/open-wallet';
 import { connectDatabase } from '../../src/infrastructure/persistence/database';
@@ -18,8 +19,7 @@ import { WagerTransactionSchema } from '../../src/infrastructure/persistence/sch
 import { WalletLedgerEntrySchema } from '../../src/infrastructure/persistence/schemas/wallet-ledger-entry.schema';
 
 // Every run owns a fresh database. The configured test database is never cleared.
-const databaseName = `jungle_test_${randomUUID().replaceAll('-', '')}`;
-let admin: MikroORM;
+let database: Awaited<ReturnType<typeof createTestDatabase>>;
 let orm: MikroORM;
 let app: INestApplication;
 let baseUrl: string;
@@ -28,20 +28,9 @@ let openWallet: OpenWallet;
 const previousDatabaseUrl = process.env.DATABASE_URL;
 
 beforeAll(async () => {
-  const configuredUrl = process.env.TEST_DATABASE_URL;
-  if (!configuredUrl || !new URL(configuredUrl).pathname.endsWith('_test')) {
-    throw new Error(
-      'TEST_DATABASE_URL must point to a dedicated database ending in _test',
-    );
-  }
-
-  admin = await connectDatabase(configuredUrl);
-  await admin.em.getConnection().execute(`create database "${databaseName}"`);
-  const url = new URL(configuredUrl);
-  url.pathname = `/${databaseName}`;
-  testUrl = url.toString();
-  orm = await connectDatabase(testUrl);
-  await orm.getMigrator().up();
+  database = await createTestDatabase();
+  orm = database.orm;
+  testUrl = database.url;
   openWallet = new OpenWallet(new PostgresWalletRepository(orm));
 
   process.env.DATABASE_URL = testUrl;
@@ -60,15 +49,9 @@ afterAll(async () => {
     if (app) {
       await app.close();
     }
-    if (orm) {
-      await orm.close(true);
-    }
   } finally {
-    if (admin) {
-      await admin.em
-        .getConnection()
-        .execute(`drop database if exists "${databaseName}" with (force)`);
-      await admin.close(true);
+    if (database) {
+      await database.close();
     }
   }
 });
@@ -104,7 +87,7 @@ async function expectFailure(
 
 describe('Wallet persistence and HTTP with real PostgreSQL', () => {
   test('applies, reverses and reapplies the migration before writing data', async () => {
-    await orm.getMigrator().down();
+    await orm.getMigrator().down({ to: 0 });
     const rows = await orm.em.execute<{ name: string | null }[]>(
       "select to_regclass('public.wallets')::text as name",
     );

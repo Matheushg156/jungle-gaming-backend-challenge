@@ -1,6 +1,7 @@
 import { Migrator } from '@mikro-orm/migrations';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { Migration202610230001 } from './migrations/Migration202610230001';
+import { Migration202610230002 } from './migrations/Migration202610230002';
 import { WalletSchema } from './schemas/wallet.schema';
 import { WagerTransactionSchema } from './schemas/wager-transaction.schema';
 import { WalletLedgerEntrySchema } from './schemas/wallet-ledger-entry.schema';
@@ -17,7 +18,7 @@ export async function connectDatabase(
     entities: [WalletSchema, WagerTransactionSchema, WalletLedgerEntrySchema],
     extensions: [Migrator],
     migrations: {
-      migrationsList: [Migration202610230001],
+      migrationsList: [Migration202610230001, Migration202610230002],
       transactional: true,
       allOrNothing: true,
     },

@@ -4,7 +4,7 @@ Implementação incremental do desafio técnico de processamento distribuído de
 
 ## Estado atual
 
-Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets` e `GET /wallets/:walletId`. Processamento de apostas, demais consultas, SQS, inbox, outbox e observabilidade ainda não estão implementados.
+Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN e LOSS, com idempotência persistente e concorrência por wallet. REFUND, ROLLBACK, reprocessamento de referências, demais consultas, SQS, inbox, outbox e observabilidade ainda estão pendentes.
 
 ## Requisitos locais
 
@@ -42,7 +42,7 @@ bun run start:prod
 
 `build` usa o compilador TypeScript para emitir JavaScript com metadados de decorators, utilizados pela injeção de dependências do NestJS.
 
-Os testes unitários usam o runner do Bun e ficam em `tests/unit/domain`, espelhando a estrutura de `src/domain`. Cobrem precisão monetária, invariantes da wallet, aritmética do ledger, referências, transições e comparação do hash de payload.
+Os testes unitários usam o runner do Bun e ficam em `tests/unit`, espelhando a estrutura de `src`. Cobrem precisão monetária, invariantes da wallet, aritmética do ledger, referências, transições e comparação do hash de payload.
 
 Para testes de integração com PostgreSQL real:
 
@@ -53,7 +53,7 @@ bun run test:integration
 bun run test
 ```
 
-`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O container de testes usa armazenamento temporário e porta 5433. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Ainda não cobrem SQS ou múltiplos processos.
+`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O container de testes usa armazenamento temporário e porta 5433. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Também verificam apostas concorrentes, 50 duplicatas em três processos independentes, replay com saldo original, rollback de aposta e progresso de wallets distintas. Ainda não cobrem SQS, morte de workers ou outbox.
 
 ## Organização das pastas
 
@@ -64,17 +64,21 @@ src/
   application/
     ports/          # Contratos necessários aos casos de uso
     wallets/        # Abertura de wallet
+    wagering/       # Submissão e contratos das apostas
   domain/
     entities/       # Wallet (aggregate root), transações e lançamentos
     value-objects/  # Money
     errors/         # Erros de domínio
   http/
     wallets/        # Controllers, DTOs e módulo HTTP
+    wagering/       # Entrada HTTP de apostas
   infrastructure/
     persistence/    # Conexão, schemas, repositories e migrations
 tests/
-  integration/      # PostgreSQL real e HTTP
+  integration/      # PostgreSQL real, HTTP e concorrência
+  support/          # Banco isolado e protocolo dos processos de teste
   unit/
+    application/
     domain/
       entities/
       value-objects/
@@ -86,8 +90,24 @@ O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplica
 
 1. Domínio financeiro e testes unitários — base implementada.
 2. PostgreSQL, MikroORM, migrations e abertura de wallet — implementados.
-3. Processamento HTTP, idempotência e concorrência.
-4. SQS, inbox, outbox e recuperação de falhas.
-5. Observabilidade, testes distribuídos e documentação final.
+3. BET, WIN e LOSS por HTTP, idempotência e concorrência — implementados.
+4. REFUND, ROLLBACK, reprocessamento de referências, consultas e reconciliação.
+5. SQS, inbox, outbox e recuperação de falhas.
+6. Observabilidade, testes distribuídos e documentação final.
 
 As decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Submeter aposta
+
+Use o ID da wallet retornado na criação:
+
+```sh
+curl -i http://localhost:3000/wagering/transactions \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: provider-a:bet-1' \
+  -d '{"providerId":"provider-a","externalTransactionId":"bet-1","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","walletId":"SUBSTITUA_PELO_ID_DA_WALLET","roundId":"round-1","gameId":"game-1","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+```
+
+WIN exige valor positivo; LOSS usa `0.00`. Respostas: 200 processada, 202 referência pendente, 400 entrada inválida, 404 wallet inexistente, 409 conflito de identidade/idempotência, 422 rejeição de negócio e 503 indisponibilidade transitória. Reenvie a mesma key e payload após falha transitória. Um replay retorna o saldo observado originalmente, mesmo após outras movimentações.
+
+WIN e LOSS podem referenciar uma BET com `referenceExternalTransactionId`. Referências ausentes são persistidas como pendentes; o worker de recuperação ainda será implementado. Eventos de integração e outbox também estão pendentes, portanto o desafio ainda não está completo.

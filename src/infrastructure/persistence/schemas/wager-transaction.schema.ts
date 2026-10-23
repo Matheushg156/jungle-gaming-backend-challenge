@@ -3,6 +3,7 @@ import {
   WagerTransactionKind,
   WagerTransactionStatus,
 } from '../../../domain/entities/wager-transaction';
+import type { WagerResult } from '../../../application/wagering/wager.contracts';
 
 export interface WagerTransactionRecord {
   id: string;
@@ -23,6 +24,7 @@ export interface WagerTransactionRecord {
   failureCode: string | null;
   createdAt: Date;
   processedAt: Date | null;
+  result: WagerResult | null;
 }
 
 export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
@@ -47,5 +49,6 @@ export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
     failureCode: { type: 'string', nullable: true },
     createdAt: { type: Date, columnType: 'timestamptz' },
     processedAt: { type: Date, columnType: 'timestamptz', nullable: true },
+    result: { type: 'json', nullable: true },
   },
 });
