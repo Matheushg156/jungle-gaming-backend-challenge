@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { WalletsModule } from './http/wallets/wallets.module';
 
-@Module({})
+@Module({ imports: [WalletsModule] })
 export class AppModule {}
