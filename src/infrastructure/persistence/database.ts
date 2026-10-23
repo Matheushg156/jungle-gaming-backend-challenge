@@ -1,3 +1,5 @@
+import { Migration202610230006 } from './migrations/Migration202610230006';
+import { InboxMessageSchema } from './schemas/inbox-message.schema';
 import { Migrator } from '@mikro-orm/migrations';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { Migration202610230001 } from './migrations/Migration202610230001';
@@ -24,6 +26,7 @@ export async function connectDatabase(
       WagerTransactionSchema,
       WalletLedgerEntrySchema,
       OutboxMessageSchema,
+      InboxMessageSchema,
     ],
     extensions: [Migrator],
     migrations: {
@@ -33,6 +36,7 @@ export async function connectDatabase(
         Migration202610230003,
         Migration202610230004,
         Migration202610230005,
+        Migration202610230006,
       ],
       transactional: true,
       allOrNothing: true,

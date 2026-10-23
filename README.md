@@ -4,7 +4,7 @@ Implementação incremental do desafio técnico de processamento distribuído de
 
 ## Estado atual
 
-Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. As consultas de transações, o ledger paginado e a reconciliação também estão disponíveis. Eventos e outbox são persistidos atomicamente e publicados em SQS via LocalStack. Consumidor SQS de entrada, inbox, retry/DLQ de entrada, health checks e a instrumentação restante ainda estão pendentes.
+Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. As consultas de transações, o ledger paginado e a reconciliação também estão disponíveis. Eventos e outbox são persistidos atomicamente e publicados em SQS via LocalStack. O consumidor SQS, a inbox persistente e retry/DLQ também estão implementados. Faltam health checks, a instrumentação restante e a revisão final.
 
 ## Requisitos locais
 
@@ -53,7 +53,7 @@ bun run test:integration
 bun run test
 ```
 
-`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O PostgreSQL de testes usa armazenamento temporário e porta 5433. O LocalStack de testes usa porta 4567 (`TEST_SQS_ENDPOINT`); cada teste de outbox cria e remove sua própria fila FIFO. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Também verificam apostas concorrentes, 50 duplicatas em três processos independentes, replay com saldo original, rollback de aposta e progresso de wallets distintas. Cobrem também reversões, recuperadores concorrentes, agenda persistente, expiração e worker agendado real. Cobrem consultas por provedor, páginas estáveis do ledger, reconciliação concorrente e detecção de divergências com log e métrica. A suíte de outbox usa LocalStack real para publicação, concorrência, backoff, recuperação após reconexão e reenvio após falha entre envio e commit. Ainda não cobre consumo de entrada, DLQ ou morte forçada de workers.
+`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O PostgreSQL de testes usa armazenamento temporário e porta 5433. O LocalStack de testes usa porta 4567 (`TEST_SQS_ENDPOINT`); cada teste de outbox cria e remove sua própria fila FIFO. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Também verificam apostas concorrentes, 50 duplicatas em três processos independentes, replay com saldo original, rollback de aposta e progresso de wallets distintas. Cobrem também reversões, recuperadores concorrentes, agenda persistente, expiração e worker agendado real. Cobrem consultas por provedor, páginas estáveis do ledger, reconciliação concorrente e detecção de divergências com log e métrica. A suíte de outbox usa LocalStack real para publicação, concorrência, backoff, recuperação após reconexão e reenvio após falha entre envio e commit. A suíte de entrada cobre inbox, retry/DLQ, 50 duplicatas em três consumidores Bun independentes, morte por SIGKILL após commit antes do ack e conclusão da mensagem durante SIGTERM. Workers agendados ficam desabilitados por padrão no preload de testes; testes específicos os habilitam.
 
 ## Organização das pastas
 
@@ -66,6 +66,7 @@ src/
     wallets/        # Abertura, paginação e reconciliação
     queries/        # Contratos de leitura
     wagering/       # Submissão e contratos das apostas
+  contracts/        # DTO de submissão compartilhado entre HTTP e SQS
   domain/
     entities/       # Wallet (aggregate root), transações e lançamentos
     value-objects/  # Money
@@ -77,7 +78,7 @@ src/
     persistence/    # Conexão, schemas, repositories e migrations
     workers/        # Agendamento da recuperação de referências
     observability/  # Registro e exposição de métricas
-    messaging/      # Publicação de eventos no SQS
+    messaging/      # Consumo de transações, validação e publicação no SQS
 tests/
   integration/      # PostgreSQL real, HTTP e concorrência
   support/          # Banco isolado e protocolo dos processos de teste
@@ -88,7 +89,7 @@ tests/
       value-objects/
 ```
 
-O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplicação usa um contrato de persistência; o módulo NestJS conecta esse contrato ao repository PostgreSQL. A mensageria será adicionada na sua etapa.
+O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplicação usa um contrato de persistência; o módulo NestJS conecta esse contrato ao repository PostgreSQL. HTTP e SQS compartilham validação de entrada e o mesmo caso de uso financeiro.
 
 ## Próximas etapas
 
@@ -98,7 +99,7 @@ O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplica
 4. REFUND, ROLLBACK e recuperação de referências — implementados.
 5. Consultas e reconciliação — implementadas.
 6. Eventos, outbox e publisher SQS — implementados.
-7. Consumidor SQS, inbox, retry e DLQ.
+7. Consumidor SQS, inbox, retry e DLQ — implementados.
 8. Observabilidade, testes de falhas distribuídas e documentação final.
 
 As decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -120,7 +121,7 @@ WIN e LOSS podem referenciar uma BET com `referenceExternalTransactionId`. REFUN
 
 Referências ausentes são persistidas como pendentes. O worker roda a cada segundo, com backoff de 1 segundo até 5 minutos e expiração após 24 horas. O estado sobrevive a reinícios. `REFERENCE_RECOVERY_ENABLED=false` desativa apenas o agendamento. Referências ainda indisponíveis na checagem de expiração geram REFERENCE_NOT_FOUND. Reversão sem saldo usa REVERSAL_INSUFFICIENT_FUNDS.
 
-A regra de uma reversão por tipo permite um REFUND e um ROLLBACK da mesma BET; essa interpretação está documentada em ARCHITECTURE.md. Transições geram os eventos correspondentes na outbox, inclusive a rejeição por expiração. O consumidor de entrada e a inbox ainda estão pendentes, portanto o desafio ainda não está completo.
+A regra de uma reversão por tipo permite um REFUND e um ROLLBACK da mesma BET; essa interpretação está documentada em ARCHITECTURE.md. Transições geram os eventos correspondentes na outbox, inclusive a rejeição por expiração. O consumidor de entrada aceita essas mesmas operações; o desafio ainda depende da etapa final de observabilidade.
 
 ## Consultas e reconciliação
 
@@ -142,7 +143,7 @@ A métrica conta verificações com divergência por processo, sem labels por wa
 
 ## Eventos e outbox
 
-A operação financeira e seus eventos são confirmados juntos no PostgreSQL. O publisher lê apenas registros confirmados e envia para `wager-events.fifo`, criada pelo hook de inicialização do LocalStack. Essa fila é de saída; as filas de transações de entrada e DLQ serão adicionadas na próxima etapa.
+A operação financeira e seus eventos são confirmados juntos no PostgreSQL. O publisher lê apenas registros confirmados e envia para `wager-events.fifo`, criada pelo hook de inicialização do LocalStack. A entrada usa `wager-transactions.fifo`, com `wager-transactions-dlq.fifo` como DLQ. O hook cria as três filas e configura redrive com cinco recebimentos.
 
 Eventos: WagerTransactionProcessed (inclusive LOSS e OPENING), WagerTransactionRejected, WagerTransactionPendingReference e WalletBalanceChanged. O envelope inclui eventId, aggregateId, correlationId, causationId, occurredAt, version e data. Valores monetários continuam sendo strings.
 
@@ -153,3 +154,37 @@ O publisher roda a cada segundo, em lotes de até 10 mensagens, sem bloquear wal
 Submissão de aposta e abertura de wallet aceitam `X-Correlation-Id` opcional. Ele é persistido para manter a correlação quando uma referência é reprocessada. O replay não gera outro conjunto de eventos.
 
 A publicação é at-least-once: uma falha entre aceitação pelo SQS e confirmação de publishedAt permite reenvio com o mesmo eventId. Consumidores precisam deduplicar esse identificador de forma persistente; FIFO não substitui essa garantia. A migration não cria eventos retroativos para transações de etapas anteriores.
+
+## Entrada SQS
+
+`SQS_CONSUMER_ENABLED=false` desabilita o consumo. As URLs ficam em `SQS_TRANSACTIONS_QUEUE_URL` e `SQS_TRANSACTIONS_DLQ_URL`. Após atualizar o código, aplique `bun run migration:up`. Para criar as filas em um LocalStack que já estava em execução, rode:
+
+```sh
+docker compose exec localstack sh /etc/localstack/init/ready.d/ready.sh
+```
+
+Envie para a fila de entrada este envelope, substituindo playerId e walletId pelos IDs de uma wallet existente. No SDK/CLI SQS, informe também MessageGroupId (walletId é uma boa escolha) e MessageDeduplicationId. A inbox usa o messageId do corpo, não o ID atribuído pelo broker.
+
+```json
+{
+  "messageId": "msg-bet-001",
+  "type": "WagerTransactionRequested",
+  "occurredAt": "2026-10-23T12:00:00.000Z",
+  "correlationId": "round-001",
+  "data": {
+    "providerId": "provider-a",
+    "externalTransactionId": "bet-001",
+    "idempotencyKey": "provider-a:bet-001",
+    "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
+    "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
+    "roundId": "round-001",
+    "gameId": "game-001",
+    "kind": "BET",
+    "money": { "amount": "10.00", "currency": "BRL" }
+  }
+}
+```
+
+Processadas, rejeitadas por negócio e PENDING_REFERENCE recebem ack após commit. Falhas transitórias tentam novamente após 1, 2, 4 e 8 segundos; no quinto recebimento vão para a DLQ. Payload inválido ou conflito permanente vai diretamente para a DLQ. O corpo original é preservado com atributos failureCode, receiveCount, consumerName e sourceMessageId. Corrija a causa antes de reenviar: a identidade de uma operação confirmada não pode ser reutilizada com dados diferentes.
+
+O consumidor faz long polling de dois segundos, uma mensagem por vez por instância, com visibilidade de 60 segundos. Instâncias adicionais trabalham em paralelo. Em SIGTERM, interrompe o receive e aguarda o processamento e ack da mensagem em andamento antes de fechar os clientes.

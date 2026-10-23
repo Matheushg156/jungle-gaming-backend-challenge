@@ -8,6 +8,7 @@ import { Money } from '../../domain/value-objects/money';
 import {
   WageringUnitOfWork,
   type StoredWager,
+  type WagerSubmissionContext,
 } from '../ports/wagering-unit-of-work';
 import { applyWager } from './apply-wager';
 import { createWagerResult } from './create-wager-result';
@@ -15,7 +16,6 @@ import { ReferenceRetryPolicy } from './reference-retry-policy';
 import { WagerTransactionStatus } from '../../domain/entities/wager-transaction';
 import { hashWagerPayload } from './hash-wager-payload';
 import type { SubmitWagerInput, SubmitWagerResult } from './wager.contracts';
-import type { ProcessingContext } from '../events/processing-context';
 import { createWagerEvents } from '../events/create-wager-events';
 
 export class SubmitWager {
@@ -24,7 +24,7 @@ export class SubmitWager {
   async execute(
     input: SubmitWagerInput,
     idempotencyKey: string,
-    processingContext: ProcessingContext = { correlationId: randomUUID() },
+    processingContext: WagerSubmissionContext = { correlationId: randomUUID() },
   ): Promise<SubmitWagerResult> {
     if (!/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
       throw new DomainError(
@@ -62,50 +62,55 @@ export class SubmitWager {
       createdAt: new Date(),
     });
 
-    const committed =
-      await this.unitOfWork.findByIdempotencyKey(idempotencyKey);
+    const committed = processingContext.inbox
+      ? null
+      : await this.unitOfWork.findByIdempotencyKey(idempotencyKey);
     if (committed) {
       return this.replay(committed, transaction.payloadHash);
     }
 
-    return this.unitOfWork.withLockedWallet(input.walletId, async (context) => {
-      const existing = await context.findByIdempotencyKey(idempotencyKey);
-      if (existing) {
-        return this.replay(existing, transaction.payloadHash);
-      }
-      if (
-        await context.findByExternalId(
-          input.providerId,
-          input.externalTransactionId,
-        )
-      ) {
-        throw new DomainError(
-          'EXTERNAL_TRANSACTION_CONFLICT',
-          'Provider transaction was already submitted with another key',
-        );
-      }
+    return this.unitOfWork.withLockedWallet(
+      input.walletId,
+      async (context) => {
+        const existing = await context.findByIdempotencyKey(idempotencyKey);
+        if (existing) {
+          return this.replay(existing, transaction.payloadHash);
+        }
+        if (
+          await context.findByExternalId(
+            input.providerId,
+            input.externalTransactionId,
+          )
+        ) {
+          throw new DomainError(
+            'EXTERNAL_TRANSACTION_CONFLICT',
+            'Provider transaction was already submitted with another key',
+          );
+        }
 
-      const entry = await applyWager(transaction, context);
-      const result = createWagerResult(transaction, context.wallet);
-      const retry =
-        transaction.status === WagerTransactionStatus.PendingReference
-          ? ReferenceRetryPolicy.initial(transaction.createdAt)
-          : undefined;
-      await context.save({
-        transaction,
-        result,
-        processingContext,
-        events: createWagerEvents(
+        const entry = await applyWager(transaction, context);
+        const result = createWagerResult(transaction, context.wallet);
+        const retry =
+          transaction.status === WagerTransactionStatus.PendingReference
+            ? ReferenceRetryPolicy.initial(transaction.createdAt)
+            : undefined;
+        await context.save({
           transaction,
-          context.wallet,
-          entry,
+          result,
           processingContext,
-        ),
-        ...(entry ? { entry } : {}),
-        ...(retry ? { referenceRetry: retry } : {}),
-      });
-      return { ...result, idempotentReplay: false };
-    });
+          events: createWagerEvents(
+            transaction,
+            context.wallet,
+            entry,
+            processingContext,
+          ),
+          ...(entry ? { entry } : {}),
+          ...(retry ? { referenceRetry: retry } : {}),
+        });
+        return { ...result, idempotentReplay: false };
+      },
+      processingContext.inbox,
+    );
   }
 
   private replay(stored: StoredWager, payloadHash: string): SubmitWagerResult {

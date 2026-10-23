@@ -16,7 +16,7 @@ import { WagerTransactionStatus } from '../../domain/entities/wager-transaction'
 import { DomainError } from '../../domain/errors/domain-error';
 import { ProviderIdentityGuard } from '../provider-identity.guard';
 import { readCorrelationId } from '../read-correlation-id';
-import { SubmitWagerDto } from './submit-wager.dto';
+import { SubmitWagerDto } from '../../contracts/submit-wager.dto';
 import { WagerReadRepository } from '../../application/ports/wager-read.repository';
 
 interface HttpStatusResponse {

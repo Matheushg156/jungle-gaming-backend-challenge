@@ -11,7 +11,7 @@ import {
   ValidateNested,
   ValidateIf,
 } from 'class-validator';
-import { WagerTransactionKind } from '../../domain/entities/wager-transaction';
+import { WagerTransactionKind } from '../domain/entities/wager-transaction';
 
 class WagerMoneyDto {
   @IsString()

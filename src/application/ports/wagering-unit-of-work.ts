@@ -7,6 +7,17 @@ import type { WagerTransactionKind } from '../../domain/entities/wager-transacti
 import type { IntegrationEvent } from '../../domain/events/integration-event';
 import type { ProcessingContext } from '../events/processing-context';
 
+export interface InboxDelivery {
+  consumerName: string;
+  messageId: string;
+  payloadHash: string;
+  receivedAt: Date;
+}
+
+export interface WagerSubmissionContext extends ProcessingContext {
+  inbox?: InboxDelivery;
+}
+
 export interface StoredWager {
   transaction: WagerTransaction;
   result: WagerResult | null;
@@ -46,5 +57,6 @@ export abstract class WageringUnitOfWork {
   abstract withLockedWallet<T>(
     walletId: string,
     action: (context: LockedWageringContext) => Promise<T>,
+    inbox?: InboxDelivery,
   ): Promise<T>;
 }

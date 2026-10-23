@@ -2,7 +2,7 @@
 
 ## Escopo atual
 
-Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas de transações, ledger paginado e reconciliação estão implementados. Os quatro eventos mínimos, a outbox transacional e a publicação em SQS estão implementados. Consumidor de entrada, inbox, DLQ, health checks e a instrumentação restante estão pendentes.
+Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas de transações, ledger paginado e reconciliação estão implementados. Os quatro eventos mínimos, a outbox transacional e a publicação em SQS estão implementados. Consumidor de entrada, inbox persistente, retry/DLQ e shutdown estão implementados. Health checks e a instrumentação restante estão pendentes.
 
 ## Organização
 
@@ -34,7 +34,7 @@ Um constraint trigger `DEFERRABLE INITIALLY DEFERRED` compara saldo e soma do le
 
 A segunda migration vincula status e tipo ao ledger por triggers adiados: operações financeiras processadas exigem lançamento de mesmo valor e direção; LOSS e transações não processadas não podem ter lançamento. Identidade de jogador/moeda é validada para operações processadas, permitindo que rejeições preservem os valores enviados para auditoria. Estados terminais têm proteção contra alterações SQL. A terceira migration valida também a identidade, tipo, estado e valor integral das referências processadas e persiste a agenda de retentativas.
 
-Os testes verificam 50 cópias da mesma aposta, duas apostas de 80 disputando 100 e processamento independente de outra wallet enquanto uma está bloqueada. Um cenário adicional usa três processos Bun independentes, com barreira de prontidão, para submeter 50 cópias e verificar débito único. Isso ainda não comprova crash recovery ou concorrência de workers SQS/outbox.
+Os testes verificam 50 cópias da mesma aposta, duas apostas de 80 disputando 100 e processamento independente de outra wallet enquanto uma está bloqueada. Um cenário adicional usa três processos Bun independentes, com barreira de prontidão, para submeter 50 cópias e verificar débito único. A suíte SQS também usa três processos consumidores e mata um processo após commit antes do ack, comprovando redelivery com efeito único.
 
 O rollback da segunda migration remove o snapshot do resultado. Para preservar rejeições auditáveis que não combinam com a identidade da wallet, a FK composta anterior é restaurada como NOT VALID: ela volta a validar novas escritas, sem excluir registros existentes. Não é uma operação de rollback de aplicação sem perda de funcionalidade; migrations down são ferramentas de desenvolvimento e precisam ser avaliadas antes de uso em um banco com dados.
 
@@ -44,7 +44,7 @@ A integração com Identity Provider fica fora da implementação inicial, pois 
 
 ## Decisões ainda pendentes
 
-- Taxonomia e política de retry/DLQ do consumidor de entrada. O destino de saída é wager-events.fifo.
+- Completar health checks, métricas e revisão de logs.
 
 Essas decisões serão resolvidas antes das respectivas implementações e acompanhadas de testes.
 
@@ -147,4 +147,22 @@ SqsEventPublisher usa o SDK oficial, aggregateId como MessageGroupId e eventId c
 
 O Compose fixa LocalStack 4.0.3 e usa um hook ready.d para a fila de saída. O serviço de testes separado usa porta 4567 e filas exclusivas por teste. A aplicação está configurada para o ambiente local do desafio; não há provisionamento AWS externo. O SDK não faz retry interno, deixando a política de publicação concentrada na outbox.
 
-O worker interrompe o timer e aguarda a operação em andamento antes de fechar banco e cliente SQS. Testes com PostgreSQL e SQS reais comprovam atomicidade com falha injetada na outbox, invisibilidade de registros não confirmados, dois publishers concorrentes, falha de envio, retomada por nova conexão e reenvio após rollback posterior à aceitação pelo SQS. Esse rollback simula a fronteira de falha; testes de morte forçada de processos e consumo idempotente ainda serão acrescentados.
+O worker interrompe o timer e aguarda a operação em andamento antes de fechar banco e cliente SQS. Testes com PostgreSQL e SQS reais comprovam atomicidade com falha injetada na outbox, invisibilidade de registros não confirmados, dois publishers concorrentes, falha de envio, retomada por nova conexão e reenvio após rollback posterior à aceitação pelo SQS. Esse rollback simula a fronteira de publicação. A entrada também possui teste de morte forçada de um consumidor após commit antes do ack.
+
+## Inbox e consumo de entrada
+
+HTTP e SQS resolvem SubmitWager pelo WagerProcessingModule. O módulo do consumidor não depende de controllers HTTP. O DTO de negócio fica em contracts e é compartilhado; a validação da fila adiciona envelope e idempotencyKey, rejeitando campos desconhecidos, valores monetários numéricos, OPENING e o provedor reservado. O canal interno dispensa autenticação externa, mas mantém a validação da identidade do provedor.
+
+A migration 006 cria inbox_messages com chave composta (consumer_name, message_id). O messageId pertence ao envelope de aplicação, e consumerName é versionado (wager-transactions-v1). O hash SHA-256 combina tipo, idempotencyKey e o hash canônico dos campos de negócio. Metadados occurredAt/correlationId ficam fora desse hash. Reutilizar a identidade com dados ou chave diferentes é conflito permanente, inclusive após o processamento.
+
+A transação insere a inbox com ON CONFLICT DO NOTHING, obtém seu lock e valida o hash antes de bloquear a wallet. Essa ordem é fixa em todos os consumidores. Após executar o mesmo caso de uso HTTP, marca a inbox como processada antes do commit conjunto de transação, wallet, ledger e outbox. Um erro reverte todos esses registros. O caminho SQS evita o replay antecipado fora da transação: mesmo uma operação previamente aceita por HTTP precisa registrar sua entrega. Redelivery de uma inbox processada percorre o replay sob lock, sem novo ledger ou evento. O trigger SQL protege a identidade e o estado processado contra alterações.
+
+Uma PENDING_REFERENCE já aceita recebe inbox processada e ack; a recuperação posterior usa a agenda financeira persistente. Rejeições de negócio também são confirmadas e recebem ack. Erros de domínio lançados antes da aceitação, envelopes inválidos e violações SQL de integridade são permanentes e seguem para DLQ. Conexão indisponível, deadlock, serialização e falhas desconhecidas usam retry. O contador persistente de recebimentos do SQS limita a cinco tentativas. O backoff de visibilidade é 1, 2, 4 e 8 segundos; a política suporta teto de 30 segundos se ampliada. Não há contador em memória como garantia.
+
+O ack usa o receipt handle da entrega e ocorre após o retorno do commit. A visibilidade é alterada por mensagem para retry; veja [ChangeMessageVisibility](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ChangeMessageVisibility.html). Para DLQ, primeiro confirma o envio do corpo original e atributos de diagnóstico, depois remove a origem. Falha no envio ou no ack deixa a origem recuperável. O deduplicationId do encaminhamento deriva da fila e do ID do broker; a janela FIFO é limitada, portanto ferramentas de operação devem tolerar duplicatas na DLQ. A fila de origem também tem redrive nativo com cinco recebimentos como proteção quando um consumidor não consegue finalizar o encaminhamento.
+
+Uma mensagem inválida ou uma transação cujo commit foi revertido não produz um registro financeiro FAILED artificial. A evidência permanente fica na DLQ; FAILED continua reservado a uma operação financeira aceita que sofra uma transição permanente explícita. Não há descarte silencioso. DLQ requer inspeção e reenvio operacional; não há redrive automático para repetir erros permanentes.
+
+O worker usa long polling de dois segundos, recebe uma mensagem por chamada e não sobrepõe processamento local. Outros processos consomem em paralelo, e a correção permanece no PostgreSQL. A visibilidade padrão de 60 segundos excede os timeouts SQL por comando, mas não é um lease renovado por heartbeat. Se uma operação exceder esse período, pode ocorrer consumo concorrente: inbox e wallet locks preservam efeito único. Isso pode aumentar a contenção e antecipar redrive; heartbeat e ajuste de visibilidade são evolução operacional para workloads lentos.
+
+No shutdown, o AbortController cancela somente ReceiveMessage. SQL, encaminhamento e ack de uma mensagem já recebida continuam até terminar; beforeApplicationShutdown aguarda o loop antes de fechar banco e cliente SQS. SIGKILL é recuperado pela expiração de visibilidade. Os testes usam banco e filas exclusivos, comprovam retry/DLQ, rollback conjunto, identidade divergente, 50 mensagens duplicadas em três processos, SIGKILL no intervalo após commit antes de ack e SIGTERM durante uma operação em andamento. A soma do ledger é verificada contra o saldo nesses cenários.

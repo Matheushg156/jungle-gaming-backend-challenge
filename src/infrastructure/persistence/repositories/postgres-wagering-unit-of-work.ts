@@ -1,3 +1,5 @@
+import { InboxMessage } from '../../../domain/entities/inbox-message';
+import { InboxMessageSchema } from '../schemas/inbox-message.schema';
 import {
   IsolationLevel,
   LockMode,
@@ -9,6 +11,7 @@ import {
   type LockedWageringContext,
   type StoredWager,
   type PersistWager,
+  type InboxDelivery,
 } from '../../../application/ports/wagering-unit-of-work';
 import type { Wallet } from '../../../domain/entities/wallet';
 import { DomainError } from '../../../domain/errors/domain-error';
@@ -168,12 +171,17 @@ export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
   override async withLockedWallet<T>(
     walletId: string,
     action: (context: LockedWageringContext) => Promise<T>,
+    delivery?: InboxDelivery,
   ): Promise<T> {
     try {
       return await this.orm.em.fork().transactional(
         async (em) => {
           await em.execute("set local lock_timeout = '5s'");
           await em.execute("set local statement_timeout = '15s'");
+          // Always acquire the inbox before the wallet, in every consumer instance.
+          const inbox = delivery
+            ? await this.lockInbox(em, delivery)
+            : undefined;
           const record = await em.findOne(
             WalletSchema,
             { id: walletId },
@@ -183,7 +191,19 @@ export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
             throw new DomainError('WALLET_NOT_FOUND', 'Wallet not found');
           }
 
-          return action(new PostgresLockedWageringContext(em, record));
+          const result = await action(
+            new PostgresLockedWageringContext(em, record),
+          );
+          if (inbox && !inbox.isProcessed()) {
+            const processedAt = new Date();
+            inbox.markProcessed(processedAt);
+            await em.nativeUpdate(
+              InboxMessageSchema,
+              { consumerName: inbox.consumerName, messageId: inbox.messageId },
+              { processedAt },
+            );
+          }
+          return result;
         },
         { isolationLevel: IsolationLevel.READ_COMMITTED },
       );
@@ -198,5 +218,29 @@ export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
       }
       throw error;
     }
+  }
+  private async lockInbox(
+    em: EntityManager,
+    delivery: InboxDelivery,
+  ): Promise<InboxMessage> {
+    const candidate = InboxMessage.receive(delivery);
+    await em.execute(
+      `insert into inbox_messages (consumer_name, message_id, payload_hash, received_at)
+       values (?, ?, ?, ?) on conflict (consumer_name, message_id) do nothing`,
+      [
+        candidate.consumerName,
+        candidate.messageId,
+        candidate.payloadHash,
+        candidate.receivedAt,
+      ],
+    );
+    const record = await em.findOneOrFail(
+      InboxMessageSchema,
+      { consumerName: delivery.consumerName, messageId: delivery.messageId },
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    );
+    const inbox = InboxMessage.rehydrate(record);
+    inbox.assertPayload(delivery.payloadHash);
+    return inbox;
   }
 }
