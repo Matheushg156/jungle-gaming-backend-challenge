@@ -1,6 +1,7 @@
 import { WagerTransaction } from '../../../domain/entities/wager-transaction';
 import { Money } from '../../../domain/value-objects/money';
 import type { WagerResult } from '../../../application/wagering/wager.contracts';
+import type { ReferenceRetryState } from '../../../application/wagering/reference-retry-policy';
 import type { WagerTransactionRecord } from '../schemas/wager-transaction.schema';
 
 export function rehydrateWager(
@@ -31,6 +32,7 @@ export function rehydrateWager(
 export function toWagerRecord(
   transaction: WagerTransaction,
   result: WagerResult | null,
+  referenceRetry?: ReferenceRetryState,
 ): WagerTransactionRecord {
   return {
     id: transaction.id,
@@ -53,5 +55,8 @@ export function toWagerRecord(
     createdAt: transaction.createdAt,
     processedAt: transaction.processedAt ?? null,
     result,
+    referenceAttempts: referenceRetry?.attempts ?? 0,
+    nextReferenceAttemptAt: referenceRetry?.nextAttemptAt ?? null,
+    referenceExpiresAt: referenceRetry?.expiresAt ?? null,
   };
 }

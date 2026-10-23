@@ -4,12 +4,21 @@ import { SubmitWager } from '../../application/wagering/submit-wager';
 import { PersistenceModule } from '../../infrastructure/persistence/persistence.module';
 import { ProviderIdentityGuard } from '../provider-identity.guard';
 import { WageringController } from './wagering.controller';
+import { RetryPendingReferences } from '../../application/wagering/retry-pending-references';
+import { ReferenceRecoveryWorker } from '../../infrastructure/workers/reference-recovery.worker';
 
 @Module({
   imports: [PersistenceModule],
   controllers: [WageringController],
   providers: [
     ProviderIdentityGuard,
+    ReferenceRecoveryWorker,
+    {
+      provide: RetryPendingReferences,
+      useFactory: (unitOfWork: WageringUnitOfWork) =>
+        new RetryPendingReferences(unitOfWork),
+      inject: [WageringUnitOfWork],
+    },
     {
       provide: SubmitWager,
       useFactory: (unitOfWork: WageringUnitOfWork) =>

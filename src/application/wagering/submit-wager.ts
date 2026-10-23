@@ -3,23 +3,18 @@ import {
   WagerTransaction,
   WagerTransactionKind,
 } from '../../domain/entities/wager-transaction';
-import {
-  LedgerDirection,
-  type WalletLedgerEntry,
-} from '../../domain/entities/wallet-ledger-entry';
 import { DomainError } from '../../domain/errors/domain-error';
 import { Money } from '../../domain/value-objects/money';
 import {
   WageringUnitOfWork,
-  type LockedWageringContext,
   type StoredWager,
 } from '../ports/wagering-unit-of-work';
+import { applyWager } from './apply-wager';
+import { createWagerResult } from './create-wager-result';
+import { ReferenceRetryPolicy } from './reference-retry-policy';
+import { WagerTransactionStatus } from '../../domain/entities/wager-transaction';
 import { hashWagerPayload } from './hash-wager-payload';
-import type {
-  SubmitWagerInput,
-  SubmitWagerResult,
-  WagerResult,
-} from './wager.contracts';
+import type { SubmitWagerInput, SubmitWagerResult } from './wager.contracts';
 
 export class SubmitWager {
   constructor(private readonly unitOfWork: WageringUnitOfWork) {}
@@ -39,11 +34,13 @@ export class SubmitWager {
         WagerTransactionKind.Bet,
         WagerTransactionKind.Win,
         WagerTransactionKind.Loss,
+        WagerTransactionKind.Refund,
+        WagerTransactionKind.Rollback,
       ].includes(input.kind)
     ) {
       throw new DomainError(
         'UNSUPPORTED_OPERATION',
-        'This stage supports BET, WIN and LOSS',
+        'Unsupported wagering operation',
       );
     }
     if (input.providerId === '__internal__') {
@@ -85,16 +82,13 @@ export class SubmitWager {
         );
       }
 
-      const entry = await this.apply(transaction, context);
-      const result: WagerResult = {
-        transactionId: transaction.id,
-        status: transaction.status,
-        balance: context.wallet.balance.toJSON(),
-        ...(transaction.failureCode
-          ? { failureCode: transaction.failureCode }
-          : {}),
-      };
-      await context.save(transaction, result, entry);
+      const entry = await applyWager(transaction, context);
+      const result = createWagerResult(transaction, context.wallet);
+      const retry =
+        transaction.status === WagerTransactionStatus.PendingReference
+          ? ReferenceRetryPolicy.initial(transaction.createdAt)
+          : undefined;
+      await context.save(transaction, result, entry, retry);
       return { ...result, idempotentReplay: false };
     });
   }
@@ -105,76 +99,5 @@ export class SubmitWager {
       throw new Error('Accepted wager is missing its persisted result');
     }
     return { ...stored.result, idempotentReplay: true };
-  }
-
-  private async apply(
-    transaction: WagerTransaction,
-    context: LockedWageringContext,
-  ): Promise<WalletLedgerEntry | undefined> {
-    const wallet = context.wallet;
-    if (transaction.playerId !== wallet.playerId) {
-      transaction.reject('PLAYER_MISMATCH');
-      return;
-    }
-    if (transaction.money.currency !== wallet.currency) {
-      transaction.reject('CURRENCY_MISMATCH');
-      return;
-    }
-
-    let reference: WagerTransaction | undefined;
-    if (transaction.referenceExternalTransactionId) {
-      const stored = await context.findByExternalId(
-        transaction.providerId,
-        transaction.referenceExternalTransactionId,
-      );
-      if (!stored || !stored.transaction.isTerminal()) {
-        transaction.markPendingReference();
-        return;
-      }
-      reference = stored.transaction;
-      try {
-        transaction.validateReference(reference);
-      } catch (error: unknown) {
-        if (!(error instanceof DomainError)) {
-          throw error;
-        }
-        transaction.reject(error.code);
-        return;
-      }
-    }
-
-    let entry: WalletLedgerEntry | undefined;
-    if (transaction.affectsBalance()) {
-      const movement = {
-        ledgerEntryId: randomUUID(),
-        transactionId: transaction.id,
-        money: transaction.money,
-        at: new Date(),
-      };
-      // Only a debit can fail with insufficient funds. Other failures abort the SQL transaction.
-      if (transaction.ledgerDirectionFor(reference) === LedgerDirection.Debit) {
-        if (wallet.balance.isLessThan(transaction.money)) {
-          transaction.reject('INSUFFICIENT_FUNDS');
-          return;
-        }
-        entry = wallet.debit(movement);
-      } else {
-        try {
-          entry = wallet.credit(movement);
-        } catch (error: unknown) {
-          if (
-            !(error instanceof DomainError) ||
-            error.code !== 'MONEY_OUT_OF_RANGE'
-          ) {
-            throw error;
-          }
-          transaction.reject('BALANCE_LIMIT_EXCEEDED');
-          return;
-        }
-      }
-    }
-
-    transaction.markProcessed(reference?.id, new Date());
-    return entry;
   }
 }

@@ -4,7 +4,7 @@ Implementação incremental do desafio técnico de processamento distribuído de
 
 ## Estado atual
 
-Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN e LOSS, com idempotência persistente e concorrência por wallet. REFUND, ROLLBACK, reprocessamento de referências, demais consultas, SQS, inbox, outbox e observabilidade ainda estão pendentes.
+Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. Demais consultas, reconciliação, SQS, inbox, outbox e observabilidade ainda estão pendentes.
 
 ## Requisitos locais
 
@@ -53,7 +53,7 @@ bun run test:integration
 bun run test
 ```
 
-`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O container de testes usa armazenamento temporário e porta 5433. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Também verificam apostas concorrentes, 50 duplicatas em três processos independentes, replay com saldo original, rollback de aposta e progresso de wallets distintas. Ainda não cobrem SQS, morte de workers ou outbox.
+`TEST_DATABASE_URL` deve apontar para o banco dedicado `jungle_test`, com permissão de criar bancos. Cada execução cria um banco temporário exclusivo e o remove ao terminar, sem limpar o banco configurado. O container de testes usa armazenamento temporário e porta 5433. Os testes verificam migrations up/down, constraints, falha durante abertura, duplicação concorrente, leitura após reconexão e validação HTTP. Também verificam apostas concorrentes, 50 duplicatas em três processos independentes, replay com saldo original, rollback de aposta e progresso de wallets distintas. Cobrem também reversões, recuperadores concorrentes, agenda persistente, expiração e worker agendado real. Ainda não cobrem SQS, morte forçada de workers ou outbox.
 
 ## Organização das pastas
 
@@ -74,6 +74,7 @@ src/
     wagering/       # Entrada HTTP de apostas
   infrastructure/
     persistence/    # Conexão, schemas, repositories e migrations
+    workers/        # Agendamento da recuperação de referências
 tests/
   integration/      # PostgreSQL real, HTTP e concorrência
   support/          # Banco isolado e protocolo dos processos de teste
@@ -91,9 +92,10 @@ O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplica
 1. Domínio financeiro e testes unitários — base implementada.
 2. PostgreSQL, MikroORM, migrations e abertura de wallet — implementados.
 3. BET, WIN e LOSS por HTTP, idempotência e concorrência — implementados.
-4. REFUND, ROLLBACK, reprocessamento de referências, consultas e reconciliação.
-5. SQS, inbox, outbox e recuperação de falhas.
-6. Observabilidade, testes distribuídos e documentação final.
+4. REFUND, ROLLBACK e recuperação de referências — implementados.
+5. Consultas restantes e reconciliação.
+6. SQS, inbox, outbox e recuperação de falhas.
+7. Observabilidade, testes distribuídos e documentação final.
 
 As decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -110,4 +112,8 @@ curl -i http://localhost:3000/wagering/transactions \
 
 WIN exige valor positivo; LOSS usa `0.00`. Respostas: 200 processada, 202 referência pendente, 400 entrada inválida, 404 wallet inexistente, 409 conflito de identidade/idempotência, 422 rejeição de negócio e 503 indisponibilidade transitória. Reenvie a mesma key e payload após falha transitória. Um replay retorna o saldo observado originalmente, mesmo após outras movimentações.
 
-WIN e LOSS podem referenciar uma BET com `referenceExternalTransactionId`. Referências ausentes são persistidas como pendentes; o worker de recuperação ainda será implementado. Eventos de integração e outbox também estão pendentes, portanto o desafio ainda não está completo.
+WIN e LOSS podem referenciar uma BET com `referenceExternalTransactionId`. REFUND exige referência a BET; ROLLBACK exige referência a BET, WIN ou REFUND. O valor da reversão deve ser integral. Repetir a mesma operação faz replay; outra reversão do mesmo tipo sobre a mesma referência é rejeitada com REFERENCE_ALREADY_REVERSED.
+
+Referências ausentes são persistidas como pendentes. O worker roda a cada segundo, com backoff de 1 segundo até 5 minutos e expiração após 24 horas. O estado sobrevive a reinícios. `REFERENCE_RECOVERY_ENABLED=false` desativa apenas o agendamento. Referências ainda indisponíveis na checagem de expiração geram REFERENCE_NOT_FOUND. Reversão sem saldo usa REVERSAL_INSUFFICIENT_FUNDS.
+
+A regra de uma reversão por tipo permite um REFUND e um ROLLBACK da mesma BET; essa interpretação está documentada em ARCHITECTURE.md. Eventos de integração e outbox também estão pendentes, portanto o desafio ainda não está completo.

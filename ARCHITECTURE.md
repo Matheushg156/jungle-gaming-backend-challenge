@@ -2,7 +2,7 @@
 
 ## Escopo atual
 
-Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. O processamento de BET, WIN e LOSS está disponível por HTTP, com idempotência persistente e lock por wallet. REFUND, ROLLBACK, reprocessamento de referências, inbox, outbox e mensageria ainda estão pendentes.
+Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas restantes, reconciliação, inbox, outbox e mensageria ainda estão pendentes.
 
 ## Organização
 
@@ -32,7 +32,7 @@ O banco aplica unicidade por jogador/moeda, por key de idempotência global e po
 
 Um constraint trigger `DEFERRABLE INITIALLY DEFERRED` compara saldo e soma do ledger ao final da transação, obtendo lock apenas da wallet correspondente. É necessário adiar a checagem para permitir os estados intermediários entre os flushes. O custo é somar o ledger a cada checagem disparada; foi escolhido como proteção explícita nesta etapa e deverá ser avaliado com volumes maiores. A aplicação de apostas obtém o lock antes de ler/calcular o saldo. O trigger não substitui essa estratégia.
 
-A segunda migration vincula status e tipo ao ledger por triggers adiados: operações financeiras processadas exigem lançamento de mesmo valor e direção; LOSS e transações não processadas não podem ter lançamento. Identidade de jogador/moeda é validada para operações processadas, permitindo que rejeições preservem os valores enviados para auditoria. Estados terminais têm proteção contra alterações SQL. Validações completas de reversão ainda serão adicionadas com seu processamento.
+A segunda migration vincula status e tipo ao ledger por triggers adiados: operações financeiras processadas exigem lançamento de mesmo valor e direção; LOSS e transações não processadas não podem ter lançamento. Identidade de jogador/moeda é validada para operações processadas, permitindo que rejeições preservem os valores enviados para auditoria. Estados terminais têm proteção contra alterações SQL. A terceira migration valida também a identidade, tipo, estado e valor integral das referências processadas e persiste a agenda de retentativas.
 
 Os testes verificam 50 cópias da mesma aposta, duas apostas de 80 disputando 100 e processamento independente de outra wallet enquanto uma está bloqueada. Um cenário adicional usa três processos Bun independentes, com barreira de prontidão, para submeter 50 cópias e verificar débito único. Isso ainda não comprova crash recovery ou concorrência de workers SQS/outbox.
 
@@ -44,10 +44,7 @@ A integração com Identity Provider fica fora da implementação inicial, pois 
 
 ## Decisões ainda pendentes
 
-- Recuperação de referências ainda não processadas. Referência já rejeitada ou falha causa rejeição REFERENCE_NOT_PROCESSED.
-- Combinação de REFUND e ROLLBACK sobre a mesma referência.
-- Backoff e expiração de referências pendentes.
-- Extensão da taxonomia de falhas para reversões, expiração e mensageria; destino dos eventos da outbox.
+- Extensão da taxonomia de falhas para mensageria; destino dos eventos da outbox.
 
 Essas decisões serão resolvidas antes das respectivas implementações e acompanhadas de testes.
 
@@ -67,13 +64,13 @@ REFUND aceita BET; ROLLBACK aceita BET, WIN ou REFUND e inverte sua direção. R
 
 ## Idempotência e processamento
 
-`SubmitWager` contém as decisões de negócio; `WageringUnitOfWork` expõe apenas as operações que precisam compartilhar a mesma transação SQL e a wallet bloqueada. O adapter PostgreSQL implementa essa fronteira com EntityManager próprio. Mapeadores explícitos fazem a conversão entre registros e factories de domínio e são compartilhados com a abertura de wallet.
+`SubmitWager` coordena submissão e idempotência; `applyWager` compartilha a aplicação das regras entre submissão e recuperação; `WageringUnitOfWork` expõe apenas as operações que precisam compartilhar a mesma transação SQL e a wallet bloqueada. O adapter PostgreSQL implementa essa fronteira com EntityManager próprio. Mapeadores explícitos fazem a conversão entre registros e factories de domínio e são compartilhados com a abertura de wallet.
 
 A idempotency key vem exclusivamente do header e é global, com 1 a 255 caracteres ASCII imprimíveis sem espaços. Nunca é derivada nem substituída pelo identificador externo. `hashWagerPayload` usa SHA-256 sobre JSON UTF-8 com as chaves de negócio em ordem lexicográfica explícita, inclusive em `money`. A referência só entra quando fornecida. Headers, key, messageId e demais metadados de transporte são excluídos. Os valores não são normalizados: contratos exigem strings decimais em escala fixa.
 
 Uma leitura prévia pode devolver um replay já confirmado sem disputar o lock. Para uma nova submissão, a consulta é repetida após obter o lock, pois a primeira leitura não garante exclusividade. A unicidade no banco resolve disputas entre wallets diferentes. O mesmo identificador externo com outra key é conflito, mesmo quando o payload coincide.
 
-O resultado é persistido em JSONB na mesma transação do débito/crédito e ledger. O replay devolve esse snapshot, inclusive saldo, status e failureCode, alterando apenas idempotentReplay. Uma rejeição por saldo insuficiente continua rejeitada mesmo após novos créditos. Valores de saldo são strings também no JSONB.
+O resultado é persistido em JSONB na mesma transação do débito/crédito e ledger. O replay devolve esse snapshot, inclusive saldo, status e failureCode, alterando apenas idempotentReplay. Uma rejeição por saldo insuficiente continua rejeitada mesmo após novos créditos. Enquanto uma operação está pendente, seu snapshot é atualizado atomicamente quando o worker muda seu estado; após atingir estado terminal, o snapshot não muda mais. Valores de saldo são strings também no JSONB.
 
 ## Respostas e falhas atuais
 
@@ -90,6 +87,22 @@ O resultado é persistido em JSONB na mesma transação do débito/crédito e le
 | Timeout de lock ou indisponibilidade transitória do banco    | 503 / DATABASE_UNAVAILABLE          |
 | Falha inesperada de persistência                             | 500 / INTERNAL_ERROR                |
 
-Rejeições atuais incluem INSUFFICIENT_FUNDS, PLAYER_MISMATCH, CURRENCY_MISMATCH, BALANCE_LIMIT_EXCEEDED, REFERENCE_MISMATCH, REFERENCE_NOT_PROCESSED e INVALID_REFERENCE_KIND. Nenhuma altera saldo ou cria ledger. Erros do driver são convertidos sem expor SQL ou parâmetros. A taxonomia será estendida para distinguir saldo insuficiente em reversões.
+Rejeições atuais incluem INSUFFICIENT_FUNDS, PLAYER_MISMATCH, CURRENCY_MISMATCH, BALANCE_LIMIT_EXCEEDED, REFERENCE_MISMATCH, REFERENCE_NOT_PROCESSED e INVALID_REFERENCE_KIND. Nenhuma altera saldo ou cria ledger. Erros do driver são convertidos sem expor SQL ou parâmetros. Reversões acrescentam REFERENCE_ALREADY_REVERSED, REVERSAL_AMOUNT_MISMATCH e REVERSAL_INSUFFICIENT_FUNDS. A expiração de uma referência ainda indisponível usa REFERENCE_NOT_FOUND.
 
-Referências ausentes já ficam persistidas como PENDING_REFERENCE, mas ainda não há worker para retentá-las. Eventos e outbox ainda não fazem parte do processamento: esta é uma etapa intermediária e não atende à garantia final de não perder eventos após commit.
+## Reversões e recuperação de referências
+
+REFUND credita uma BET processada. ROLLBACK inverte BET, WIN ou REFUND; quando implica débito, saldo insuficiente gera REVERSAL_INSUFFICIENT_FUNDS e não produz ledger. Reversões parciais são rejeitadas. O lock por wallet protege a consulta de reversões anteriores; o índice único parcial é a garantia adicional no banco.
+
+A interpretação adotada segue literalmente a unicidade por referência **e tipo** do enunciado. Assim, REFUND e ROLLBACK podem cada um reverter a mesma BET uma vez, produzindo dois créditos distintos. Não há uma regra adicional de cancelamento global da rodada. Essa escolha está explícita porque um produto real poderia optar por outra semântica; o teste confirma o comportamento definido aqui.
+
+Referência ausente ou ainda não terminal mantém a operação PENDING_REFERENCE. Referência terminal rejeitada ou falha causa REFERENCE_NOT_PROCESSED. Identidade incompatível é rejeitada assim que conhecida, mesmo se a referência ainda estiver pendente.
+
+A agenda é persistida com contador de tentativas, próximo horário e expiração. O atraso inicial é 1 segundo, dobra a cada tentativa e tem teto de 5 minutos. A expiração é 24 horas após criação, permitindo atrasos operacionais sem manter operações pendentes indefinidamente. O próximo horário nunca ultrapassa a expiração. Na checagem de expiração, uma referência já disponível ainda pode resolver a operação; se continuar indisponível, a operação é rejeitada com REFERENCE_NOT_FOUND.
+
+Cada instância consulta até 50 candidatas por execução. A seleção não bloqueia transações; depois de obter o lock da wallet, o worker relê estado e prazo. Isso evita inverter a ordem de locks entre submissão e recuperação e torna seleções duplicadas seguras. Apenas uma tentativa por operação vence a rechecagem de horário. Uma falha não impede o processamento das demais candidatas; a falha é reportada após o lote e sua transação permanece disponível para retry.
+
+`ReferenceRecoveryWorker` executa um lote a cada segundo, sem sobreposição local. O indicador em memória serve apenas ao agendamento: PostgreSQL mantém a correção entre instâncias. `REFERENCE_RECOVERY_ENABLED=false` desativa o agendamento, útil para testes determinísticos. Antes do encerramento, o worker interrompe o timer e aguarda o lote em andamento, antes do fechamento da conexão com PostgreSQL.
+
+Os testes incluem referências anteriores à BET, dois recuperadores concorrentes, persistência do backoff, expiração sem sleeps longos, falha e rollback durante recuperação e execução real do timer. A recuperação após reconexão não substitui os futuros testes de morte forçada de processos.
+
+Eventos e outbox ainda não fazem parte do processamento: esta é uma etapa intermediária e não atende à garantia final de não perder eventos após commit. A emissão do evento de rejeição por expiração também depende dessa próxima etapa.

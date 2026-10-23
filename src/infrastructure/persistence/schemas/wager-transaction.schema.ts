@@ -25,6 +25,9 @@ export interface WagerTransactionRecord {
   createdAt: Date;
   processedAt: Date | null;
   result: WagerResult | null;
+  referenceAttempts: number;
+  nextReferenceAttemptAt: Date | null;
+  referenceExpiresAt: Date | null;
 }
 
 export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
@@ -50,5 +53,16 @@ export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
     createdAt: { type: Date, columnType: 'timestamptz' },
     processedAt: { type: Date, columnType: 'timestamptz', nullable: true },
     result: { type: 'json', nullable: true },
+    referenceAttempts: { type: 'integer', default: 0 },
+    nextReferenceAttemptAt: {
+      type: Date,
+      columnType: 'timestamptz',
+      nullable: true,
+    },
+    referenceExpiresAt: {
+      type: Date,
+      columnType: 'timestamptz',
+      nullable: true,
+    },
   },
 });

@@ -26,6 +26,7 @@ let baseUrl: string;
 let testUrl: string;
 let openWallet: OpenWallet;
 const previousDatabaseUrl = process.env.DATABASE_URL;
+const previousRecoverySetting = process.env.REFERENCE_RECOVERY_ENABLED;
 
 beforeAll(async () => {
   database = await createTestDatabase();
@@ -34,12 +35,18 @@ beforeAll(async () => {
   openWallet = new OpenWallet(new PostgresWalletRepository(orm));
 
   process.env.DATABASE_URL = testUrl;
+  process.env.REFERENCE_RECOVERY_ENABLED = 'false';
   app = await NestFactory.create(AppModule, { logger: false });
   await app.listen(0, '127.0.0.1');
   baseUrl = await app.getUrl();
 }, 30000);
 
 afterAll(async () => {
+  if (previousRecoverySetting === undefined) {
+    delete process.env.REFERENCE_RECOVERY_ENABLED;
+  } else {
+    process.env.REFERENCE_RECOVERY_ENABLED = previousRecoverySetting;
+  }
   if (previousDatabaseUrl === undefined) {
     delete process.env.DATABASE_URL;
   } else {

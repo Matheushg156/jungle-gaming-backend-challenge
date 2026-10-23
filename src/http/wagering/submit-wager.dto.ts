@@ -56,6 +56,8 @@ export class SubmitWagerDto {
     WagerTransactionKind.Bet,
     WagerTransactionKind.Win,
     WagerTransactionKind.Loss,
+    WagerTransactionKind.Refund,
+    WagerTransactionKind.Rollback,
   ])
   kind!: WagerTransactionKind;
 

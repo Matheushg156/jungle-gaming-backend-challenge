@@ -26,12 +26,27 @@ import {
   type WagerTransactionRecord,
 } from '../schemas/wager-transaction.schema';
 import { WalletLedgerEntrySchema } from '../schemas/wallet-ledger-entry.schema';
+import {
+  WagerTransactionKind,
+  WagerTransactionStatus,
+} from '../../../domain/entities/wager-transaction';
+import type { ReferenceRetryState } from '../../../application/wagering/reference-retry-policy';
 
 function toStoredWager(
   record: WagerTransactionRecord | null,
 ): StoredWager | null {
   return record
-    ? { transaction: rehydrateWager(record), result: record.result }
+    ? {
+        transaction: rehydrateWager(record),
+        result: record.result,
+        referenceRetry: record.referenceExpiresAt
+          ? {
+              attempts: record.referenceAttempts,
+              nextAttemptAt: record.nextReferenceAttemptAt,
+              expiresAt: record.referenceExpiresAt,
+            }
+          : null,
+      }
     : null;
 }
 
@@ -67,8 +82,17 @@ class PostgresLockedWageringContext implements LockedWageringContext {
     transaction: WagerTransaction,
     result: WagerResult,
     entry?: WalletLedgerEntry,
+    referenceRetry?: ReferenceRetryState,
   ): Promise<void> {
-    this.em.create(WagerTransactionSchema, toWagerRecord(transaction, result));
+    const record = toWagerRecord(transaction, result, referenceRetry);
+    const existing = await this.em.findOne(WagerTransactionSchema, {
+      id: transaction.id,
+    });
+    if (existing) {
+      this.em.assign(existing, record);
+    } else {
+      this.em.create(WagerTransactionSchema, record);
+    }
     await this.em.flush();
 
     if (entry) {
@@ -79,11 +103,45 @@ class PostgresLockedWageringContext implements LockedWageringContext {
       await this.em.flush();
     }
   }
+
+  async hasProcessedReversal(
+    referenceId: string,
+    kind: WagerTransactionKind,
+  ): Promise<boolean> {
+    return (
+      (await this.em.count(WagerTransactionSchema, {
+        referenceTransactionId: referenceId,
+        kind,
+        status: WagerTransactionStatus.Processed,
+      })) > 0
+    );
+  }
 }
 
 export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
   constructor(private readonly orm: MikroORM) {
     super();
+  }
+
+  override async findDueReferences(
+    now: Date,
+    limit: number,
+  ): Promise<{ walletId: string; idempotencyKey: string }[]> {
+    const records = await this.orm.em.fork().find(
+      WagerTransactionSchema,
+      {
+        status: WagerTransactionStatus.PendingReference,
+        $or: [
+          { nextReferenceAttemptAt: { $lte: now } },
+          { referenceExpiresAt: { $lte: now } },
+        ],
+      },
+      { limit, orderBy: { nextReferenceAttemptAt: 'asc', id: 'asc' } },
+    );
+    return records.map(({ walletId, idempotencyKey }) => ({
+      walletId,
+      idempotencyKey,
+    }));
   }
 
   override async findByIdempotencyKey(
