@@ -2,21 +2,21 @@
 
 ## Escopo atual
 
-Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas de transações, ledger paginado e reconciliação estão implementados. Os quatro eventos mínimos, a outbox transacional e a publicação em SQS estão implementados. Consumidor de entrada, inbox persistente, retry/DLQ e shutdown estão implementados. Health checks e a instrumentação restante estão pendentes.
+Estão implementados o domínio financeiro, a persistência PostgreSQL e a abertura e consulta de wallet por HTTP. Abertura confirma wallet, OPENING e ledger na mesma transação. Os testes unitários e de integração usam Bun e PostgreSQL real. BET, WIN, LOSS, REFUND e ROLLBACK estão disponíveis por HTTP, com idempotência persistente e lock por wallet. Referências fora de ordem são recuperadas por um worker agendado. Consultas de transações, ledger paginado e reconciliação estão implementados. Os quatro eventos mínimos, a outbox transacional e a publicação em SQS estão implementados. Consumidor de entrada, inbox persistente, retry/DLQ e shutdown estão implementados. Health checks e a instrumentação operacional estão implementados.
 
 ## Organização
 
-Uma aplicação NestJS modular, com possibilidade de executar várias instâncias. A separação será introduzida conforme cada responsabilidade aparecer: entrada HTTP, casos de uso, domínio, persistência e mensageria. Não haverá camadas que apenas repassem dados.
+Uma aplicação NestJS modular, com possibilidade de executar várias instâncias. A separação organiza responsabilidades de entrada HTTP, casos de uso, domínio, persistência e mensageria. As portas descrevem persistência, publicação e observação sem dependência de framework no domínio.
 
-TypeScript usa modo estrito, checagem de acesso por índice e propriedades opcionais exatas. O domínio não dependerá de decorators do NestJS ou do ORM.
+TypeScript usa modo estrito, checagem de acesso por índice e propriedades opcionais exatas. O domínio não depende de decorators do NestJS ou do ORM.
 
-O domínio está dividido em `entities`, `value-objects` e `errors`. Wallet é a raiz do agregado e fica junto às demais entidades, sem uma pasta adicional apenas para ela. Os testes ficam fora do código de produção, em `tests/unit`, espelhando as pastas do domínio. Novas categorias de testes serão adicionadas quando houver integração e concorrência real para verificar.
+O domínio está dividido em `entities`, `value-objects` e `errors`. Wallet é a raiz do agregado e fica junto às demais entidades, sem uma pasta adicional apenas para ela. Os testes ficam fora do código de produção, em `tests/unit`, espelhando as pastas do domínio. Testes de integração verificam banco e SQS reais, incluindo concorrência entre processos e falhas.
 
 Lint e checagem de tipos abrangem código de produção e testes. O build inclui apenas `src`, mantendo `dist/main.js` como entrada. Imports são explícitos, sem arquivos de reexportação ou aliases neste estágio. Helpers de teste usam nomes que descrevem o que criam; ficam no arquivo que os utiliza enquanto não houver necessidade real de compartilhamento. Blocos condicionais exigem chaves pelo ESLint.
 
 ## Runtime e build
 
-Bun 1.x será usado para instalar dependências, executar a aplicação e rodar testes. O build usa `tsc`, preservando os metadados de decorators necessários ao NestJS. ESLint verifica também regras que dependem de tipos; Prettier cuida da formatação.
+Bun 1.x é usado para instalar dependências, executar a aplicação e rodar testes. O build usa `tsc`, preservando os metadados de decorators necessários ao NestJS. ESLint verifica também regras que dependem de tipos; Prettier cuida da formatação.
 
 ## Persistência e concorrência
 
@@ -24,7 +24,7 @@ MikroORM 6 foi escolhido por ser preferencial no enunciado e permitir explicitar
 
 O processamento usa `LockMode.PESSIMISTIC_WRITE` na linha da wallet, antes de ler e calcular o saldo, dentro de uma transação READ COMMITTED. Isso serializa operações da mesma wallet e permite paralelismo entre wallets distintas. O custo é a espera por lock em wallets muito disputadas. O limite de espera é 5 segundos, com timeout de statement de 15 segundos. Timeouts abortam a transação e retornam 503; o cliente pode reenviar a mesma key. Não há retry interno ilimitado.
 
-Cada chamada do repository cria um EntityManager com `fork()`, isolando Unit of Work e Identity Map. `transactional()` delimita o commit. A abertura persiste a wallet, a transação OPENING e o ledger com flushes explícitos para respeitar as foreign keys; flush não é commit. Falha em qualquer inserção reverte o conjunto. Saldo zero não gera OPENING. A outbox participa dessa mesma fronteira transacional. A inbox será acrescentada quando o consumidor de entrada for implementado.
+Cada chamada do repository cria um EntityManager com `fork()`, isolando Unit of Work e Identity Map. `transactional()` delimita o commit. A abertura persiste a wallet, a transação OPENING e o ledger com flushes explícitos para respeitar as foreign keys; flush não é commit. Falha em qualquer inserção reverte o conjunto. Saldo zero não gera OPENING. A outbox participa dessa mesma fronteira transacional. A inbox participa da mesma transação quando a entrada vem do SQS.
 
 As migrations são a fonte da verdade do schema: não usamos atualização automática nem geração de schema em runtime. Elas são registradas explicitamente e executadas pelo Migrator, conforme a [documentação do MikroORM](https://mikro-orm.io/docs/migrations). A migration inicial possui `up` e `down`, testados em banco exclusivo e temporário. AJV 8 é uma dependência explícita para satisfazer o peer de `ajv-draft-04` na cadeia de dependências do ORM; sem ela, o AJV 6 do ESLint era resolvido incorretamente na execução com Bun.
 
@@ -42,11 +42,9 @@ O rollback da segunda migration remove o snapshot do resultado. Para preservar r
 
 A integração com Identity Provider fica fora da implementação inicial, pois não pontua no desafio. O `ProviderIdentityGuard` é o ponto de extensão explícito e atualmente permite todas as requisições de wallets e apostas. Uma evolução poderá validar tokens OIDC de um IdP externo, associar a identidade autenticada ao providerId e proteger as rotas de negócio. Health checks permanecerão públicos. Não haverá armazenamento próprio de senhas.
 
-## Decisões ainda pendentes
+## Limites de escopo
 
-- Completar health checks, métricas e revisão de logs.
-
-Essas decisões serão resolvidas antes das respectivas implementações e acompanhadas de testes.
+Autenticação externa e os diferenciais opcionais não foram implementados. As limitações operacionais de mensageria e observabilidade são explicitadas nas seções abaixo.
 
 ## Domínio financeiro
 
@@ -125,7 +123,7 @@ O repository faz uma única consulta agregada, usando o mesmo snapshot MVCC para
 
 A diferença é armazenado menos calculado. Saldo inicial positivo entra na soma via OPENING. Wallet vazia calcula 0.00 e zero entradas. A consulta não adquire lock de escrita nem altera ou corrige registros. O custo é percorrer as entradas da wallet, aceitável para a reconciliação explícita do desafio.
 
-Uma diferença gera resposta `consistent: false`, log JSON com walletId e correlationId sem valores financeiros e incremento de wallet_reconciliation_mismatches_total. O cliente [@prometheus-io/client](https://github.com/prometheus/client_js) fornece Counter e Registry; usamos um registry por aplicação para evitar estado global compartilhado nos testes. A métrica é exposta em GET /metrics, sem labels por wallet para limitar cardinalidade. O contador é local ao processo e conta cada verificação divergente; um coletor poderá acompanhar cada instância. As outras métricas obrigatórias ainda não foram implementadas.
+Uma diferença gera resposta `consistent: false`, log JSON com walletId e correlationId sem valores financeiros e incremento de wallet_reconciliation_mismatches_total. O cliente [@prometheus-io/client](https://github.com/prometheus/client_js) fornece Counter e Registry; usamos um registry por aplicação para evitar estado global compartilhado nos testes. A métrica é exposta em GET /metrics, sem labels por wallet para limitar cardinalidade. O contador é local ao processo e conta cada verificação divergente; um coletor poderá acompanhar cada instância. As demais métricas operacionais são descritas na seção de observabilidade.
 
 O teste de divergência desabilita temporariamente o trigger de proteção apenas em um banco criado exclusivamente pelo teste, injeta inconsistência e comprova resposta, log, métrica e ausência de correção automática. Os demais testes mantêm as proteções habilitadas. Também há testes de paginação durante novas movimentações, isolamento de consultas por provedor e reconciliação durante débitos concorrentes.
 
@@ -166,3 +164,19 @@ Uma mensagem inválida ou uma transação cujo commit foi revertido não produz 
 O worker usa long polling de dois segundos, recebe uma mensagem por chamada e não sobrepõe processamento local. Outros processos consomem em paralelo, e a correção permanece no PostgreSQL. A visibilidade padrão de 60 segundos excede os timeouts SQL por comando, mas não é um lease renovado por heartbeat. Se uma operação exceder esse período, pode ocorrer consumo concorrente: inbox e wallet locks preservam efeito único. Isso pode aumentar a contenção e antecipar redrive; heartbeat e ajuste de visibilidade são evolução operacional para workloads lentos.
 
 No shutdown, o AbortController cancela somente ReceiveMessage. SQL, encaminhamento e ack de uma mensagem já recebida continuam até terminar; beforeApplicationShutdown aguarda o loop antes de fechar banco e cliente SQS. SIGKILL é recuperado pela expiração de visibilidade. Os testes usam banco e filas exclusivos, comprovam retry/DLQ, rollback conjunto, identidade divergente, 50 mensagens duplicadas em três processos, SIGKILL no intervalo após commit antes de ack e SIGTERM durante uma operação em andamento. A soma do ledger é verificada contra o saldo nesses cenários.
+
+## Health checks, logs e métricas
+
+MonitoringModule reúne os controllers de health e métricas. ObservabilityModule fornece o registry e as implementações das portas ReconciliationObserver e ProcessingObserver, sem importar persistência. PersistenceModule injeta o observador nos adapters; essa direção evita dependência circular e mantém o domínio independente do Prometheus e do NestJS.
+
+GET /health/live verifica atendimento do processo. GET /health/ready consulta PostgreSQL e GetQueueAttributes nas três filas configuradas, em paralelo, com prazo de 2,5 segundos por dependência. Retorna 503 quando alguma verificação falha. As verificações não enviam mensagens nem alteram saldo. Não há guard de autenticação nessas rotas. O timeout do HTTP não cancela uma aquisição de conexão SQL já pendente; consultas que obtiverem conexão usam statement_timeout de dois segundos, e chamadas SQS têm timeout próprio. Inicialização ainda exige conexão com o PostgreSQL.
+
+A instrumentação financeira observa o retorno de transactional(), após confirmação do commit. A falha de flush, constraint ou commit não incrementa transações confirmadas. Somente uma nova transição com evento financeiro incrementa status/kind; uma tentativa de referência que continua pendente não repete PENDING_REFERENCE. OPENING é contado pelo adapter de abertura. O replay é contado pelo caso de uso compartilhado. Locks são classificados por códigos SQL fixos (55P03, 40P01, 40001). O histograma cobre unidade financeira e abertura positiva, falhas de processamento sob lock e replays; validações rejeitadas antes de entrar no caso de uso não são incluídas. Não representa latência fim a fim do broker.
+
+Retentativas são observadas após a agenda financeira/outbox ser confirmada ou a visibilidade SQS ser alterada. O contador de DLQ é incrementado após o envio confirmado, antes do ack da origem. Não é contador de operações financeiras únicas: reenvios fora da janela FIFO podem ser contados novamente, e redrive nativo do broker exige monitoramento da própria fila. Todos os counters são locais ao processo, sujeitos a reinício e à janela entre commit e observação; a auditoria permanece nas tabelas e na DLQ.
+
+Outbox lag e quantidade pendente são consultados no banco no scrape. O lag usa o evento não publicado mais antigo, inclusive quando está em backoff, e zera quando vazio. A consulta vê somente eventos confirmados. As gauges repetem o mesmo backlog em todas as instâncias; não devem ser somadas. A consulta tem timeout SQL de dois segundos. /metrics retorna 503 quando o scrape não consegue consultar o banco, evitando publicar um backlog antigo como se fosse atual.
+
+Os logs JSON possuem timestamp e nível. A entrada HTTP registra resultado, handler e correlationId, sem corpo, query string ou headers completos. O mesmo ID segue para as operações e eventos. Processamento financeiro adiciona walletId, transactionId, providerId e messageId quando disponíveis. IDs não viram labels Prometheus, evitando cardinalidade por usuário/wallet. O logger Nest seleciona campos conhecidos de objetos; não serializa exceções de driver, SQL ou parâmetros. O consumer registra resultados e motivos sem o corpo da mensagem.
+
+Os testes verificam readiness saudável e degradado, liveness independente, métricas após commit/replay/rollback, conflitos SQL, retentativas de referência, retry/DLQ, backlog antes e depois da publicação e ausência de IDs nas labels. Um publisher Bun é morto por SIGKILL após o commit financeiro e antes da publicação; outro processo publica o evento preservado. O smoke test usa dist/main.js, habilita os três workers e verifica HTTP, entrada e saída SQS, reconciliação, logs JSON e SIGTERM.

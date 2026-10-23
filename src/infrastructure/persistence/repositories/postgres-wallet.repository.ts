@@ -1,3 +1,4 @@
+import type { ProcessingObserver } from '../../../application/ports/processing-observer';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { MikroORM } from '@mikro-orm/postgresql';
 import {
@@ -15,7 +16,10 @@ import { WalletLedgerEntrySchema } from '../schemas/wallet-ledger-entry.schema';
 import { enqueueEvents } from '../enqueue-events';
 
 export class PostgresWalletRepository extends WalletRepository {
-  constructor(private readonly orm: MikroORM) {
+  constructor(
+    private readonly orm: MikroORM,
+    private readonly observer?: ProcessingObserver,
+  ) {
     super();
   }
 
@@ -26,6 +30,7 @@ export class PostgresWalletRepository extends WalletRepository {
     events,
     processingContext,
   }: WalletOpening): Promise<void> {
+    const started = performance.now();
     try {
       // A separate EntityManager gives each operation its own Unit of Work and Identity Map.
       await this.orm.em.fork().transactional(async (em) => {
@@ -53,6 +58,18 @@ export class PostgresWalletRepository extends WalletRepository {
         enqueueEvents(em, events);
         await em.flush();
       });
+      if (transaction) {
+        this.observer?.record({
+          event: 'transaction_committed',
+          status: transaction.status,
+          kind: transaction.kind,
+          transactionId: transaction.id,
+          walletId: wallet.id,
+          providerId: transaction.providerId,
+          correlationId: processingContext.correlationId,
+          durationSeconds: (performance.now() - started) / 1000,
+        });
+      }
     } catch (error: unknown) {
       if (error instanceof UniqueConstraintViolationException) {
         const existing = await this.orm.em.fork().findOne(WalletSchema, {

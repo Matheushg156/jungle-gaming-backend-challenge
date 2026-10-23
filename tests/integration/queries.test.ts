@@ -362,7 +362,7 @@ describe('Read endpoints and reconciliation with real PostgreSQL', () => {
   test('divergence is reported, logged and counted without silently correcting balance', async () => {
     const input = await createInput();
     const before = await getMismatchCount();
-    const log = spyOn(console, 'warn').mockImplementation(() => undefined);
+    const log = spyOn(console, 'log').mockImplementation(() => undefined);
     try {
       // Test database only: bypass the protection to simulate preexisting corruption.
       await database.orm.em.fork().transactional(async (em) => {
@@ -390,14 +390,24 @@ describe('Read endpoints and reconciliation with real PostgreSQL', () => {
         calculatedBalance: { amount: '100.00' },
         difference: { amount: '-1.00' },
       });
-      expect(log).toHaveBeenCalledWith(
-        JSON.stringify({
-          level: 'warn',
-          event: 'wallet_reconciliation_mismatch',
-          walletId: input.walletId,
-          correlationId: 'reconciliation-test',
-        }),
+      const logs = log.mock.calls.map(
+        ([line]) => JSON.parse(String(line)) as Record<string, unknown>,
       );
+      const mismatch = logs.find(
+        (entry) => entry.event === 'wallet_reconciliation_mismatch',
+      );
+      expect(mismatch).toMatchObject({
+        level: 'warn',
+        event: 'wallet_reconciliation_mismatch',
+        walletId: input.walletId,
+        correlationId: 'reconciliation-test',
+      });
+      expect(typeof mismatch?.timestamp).toBe('string');
+      expect(
+        logs.some(
+          (entry) => 'storedBalance' in entry || 'calculatedBalance' in entry,
+        ),
+      ).toBe(false);
       expect(await getMismatchCount()).toBe(before + 1);
       const unchanged = await database.orm.em
         .fork()

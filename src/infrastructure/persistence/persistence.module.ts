@@ -1,3 +1,5 @@
+import { ProcessingObserver } from '../../application/ports/processing-observer';
+import { ObservabilityModule } from '../observability/observability.module';
 import { Module, OnApplicationShutdown, Inject } from '@nestjs/common';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { WalletRepository } from '../../application/ports/wallet.repository';
@@ -13,6 +15,7 @@ import { OutboxRepository } from '../../application/ports/outbox.repository';
 import { PostgresOutboxRepository } from './repositories/postgres-outbox.repository';
 
 @Module({
+  imports: [ObservabilityModule],
   providers: [
     {
       provide: OutboxRepository,
@@ -31,17 +34,20 @@ import { PostgresOutboxRepository } from './repositories/postgres-outbox.reposit
     },
     {
       provide: WageringUnitOfWork,
-      useFactory: (orm: MikroORM) => new PostgresWageringUnitOfWork(orm),
-      inject: [MikroORM],
+      useFactory: (orm: MikroORM, observer: ProcessingObserver) =>
+        new PostgresWageringUnitOfWork(orm, observer),
+      inject: [MikroORM, ProcessingObserver],
     },
     { provide: MikroORM, useFactory: connectDatabase },
     {
       provide: WalletRepository,
-      useFactory: (orm: MikroORM) => new PostgresWalletRepository(orm),
-      inject: [MikroORM],
+      useFactory: (orm: MikroORM, observer: ProcessingObserver) =>
+        new PostgresWalletRepository(orm, observer),
+      inject: [MikroORM, ProcessingObserver],
     },
   ],
   exports: [
+    MikroORM,
     OutboxRepository,
     WalletRepository,
     WageringUnitOfWork,

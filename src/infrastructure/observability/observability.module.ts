@@ -1,14 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ReconciliationObserver } from '../../application/ports/reconciliation-observer';
-import { MetricsController } from '../../http/metrics.controller';
+import { ProcessingObserver } from '../../application/ports/processing-observer';
 import { ApplicationMetrics } from './application-metrics';
 
 @Module({
-  controllers: [MetricsController],
   providers: [
     ApplicationMetrics,
+    { provide: ProcessingObserver, useExisting: ApplicationMetrics },
     { provide: ReconciliationObserver, useExisting: ApplicationMetrics },
   ],
-  exports: [ReconciliationObserver],
+  exports: [ReconciliationObserver, ProcessingObserver, ApplicationMetrics],
 })
 export class ObservabilityModule {}

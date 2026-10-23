@@ -1,3 +1,4 @@
+import type { ProcessingObserver } from '../../../application/ports/processing-observer';
 import { InboxMessage } from '../../../domain/entities/inbox-message';
 import { InboxMessageSchema } from '../schemas/inbox-message.schema';
 import {
@@ -57,6 +58,7 @@ function toStoredWager(
 
 class PostgresLockedWageringContext implements LockedWageringContext {
   readonly wallet: Wallet;
+  saved: PersistWager | undefined;
 
   constructor(
     private readonly em: EntityManager,
@@ -116,6 +118,7 @@ class PostgresLockedWageringContext implements LockedWageringContext {
     }
     enqueueEvents(this.em, events);
     await this.em.flush();
+    this.saved = { transaction, result, events, processingContext };
   }
 
   async hasProcessedReversal(
@@ -133,7 +136,10 @@ class PostgresLockedWageringContext implements LockedWageringContext {
 }
 
 export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
-  constructor(private readonly orm: MikroORM) {
+  constructor(
+    private readonly orm: MikroORM,
+    private readonly observer?: ProcessingObserver,
+  ) {
     super();
   }
 
@@ -173,8 +179,10 @@ export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
     action: (context: LockedWageringContext) => Promise<T>,
     delivery?: InboxDelivery,
   ): Promise<T> {
+    const started = performance.now();
+    let saved: PersistWager | undefined;
     try {
-      return await this.orm.em.fork().transactional(
+      const result = await this.orm.em.fork().transactional(
         async (em) => {
           await em.execute("set local lock_timeout = '5s'");
           await em.execute("set local statement_timeout = '15s'");
@@ -191,9 +199,9 @@ export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
             throw new DomainError('WALLET_NOT_FOUND', 'Wallet not found');
           }
 
-          const result = await action(
-            new PostgresLockedWageringContext(em, record),
-          );
+          const context = new PostgresLockedWageringContext(em, record);
+          const result = await action(context);
+          saved = context.saved;
           if (inbox && !inbox.isProcessed()) {
             const processedAt = new Date();
             inbox.markProcessed(processedAt);
@@ -207,7 +215,39 @@ export class PostgresWageringUnitOfWork extends WageringUnitOfWork {
         },
         { isolationLevel: IsolationLevel.READ_COMMITTED },
       );
+      if (saved) {
+        this.observer?.record({
+          event: 'transaction_committed',
+          ...(saved.events.some((event) =>
+            event.eventType.startsWith('WagerTransaction'),
+          )
+            ? { status: saved.transaction.status }
+            : {}),
+          kind: saved.transaction.kind,
+          transactionId: saved.transaction.id,
+          walletId,
+          providerId: saved.transaction.providerId,
+          correlationId: saved.processingContext.correlationId,
+          ...(delivery ? { messageId: delivery.messageId } : {}),
+          durationSeconds: (performance.now() - started) / 1000,
+        });
+      }
+      return result;
     } catch (error: unknown) {
+      const code =
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        typeof error.code === 'string'
+          ? error.code
+          : 'UNKNOWN';
+      this.observer?.record({
+        event: 'processing_failed',
+        walletId,
+        code,
+        ...(delivery ? { messageId: delivery.messageId } : {}),
+        durationSeconds: (performance.now() - started) / 1000,
+      });
       if (error instanceof UniqueConstraintViolationException) {
         // Cross-wallet key collisions can race despite separate wallet locks.
         // The database rejects the loser and rolls back all of its effects.

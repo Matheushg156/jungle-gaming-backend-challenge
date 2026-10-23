@@ -4,7 +4,7 @@ Implementação incremental do desafio técnico de processamento distribuído de
 
 ## Estado atual
 
-Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. As consultas de transações, o ledger paginado e a reconciliação também estão disponíveis. Eventos e outbox são persistidos atomicamente e publicados em SQS via LocalStack. O consumidor SQS, a inbox persistente e retry/DLQ também estão implementados. Faltam health checks, a instrumentação restante e a revisão final.
+Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. As consultas de transações, o ledger paginado e a reconciliação também estão disponíveis. Eventos e outbox são persistidos atomicamente e publicados em SQS via LocalStack. O consumidor SQS, a inbox persistente e retry/DLQ também estão implementados. Health checks, logs JSON e métricas operacionais estão implementados. As limitações e decisões de escopo estão em ARCHITECTURE.md.
 
 ## Requisitos locais
 
@@ -29,7 +29,7 @@ curl -i http://localhost:3000/wallets \
   -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"100.00","currency":"BRL"}}'
 ```
 
-A criação retorna `201`; duplicação de jogador/moeda retorna `409`; entrada inválida retorna `400`. A consulta retorna `200` ou `404` para wallet inexistente. A autenticação está adiada: o guard atual permite as requisições e é o ponto de extensão para um IdP externo.
+A criação retorna `201`; duplicação de jogador/moeda retorna `409`; entrada inválida retorna `400`. A consulta retorna `200` ou `404` para wallet inexistente. A autenticação externa foi omitida conforme permitido: o guard atual permite as requisições e é o ponto de extensão para um IdP externo.
 
 ```sh
 bun run lint
@@ -71,13 +71,15 @@ src/
     entities/       # Wallet (aggregate root), transações e lançamentos
     value-objects/  # Money
     errors/         # Erros de domínio
+    events/         # Envelope e eventos financeiros
   http/
     wallets/        # Controllers, DTOs e módulo HTTP
     wagering/       # Entrada HTTP de apostas
   infrastructure/
     persistence/    # Conexão, schemas, repositories e migrations
-    workers/        # Agendamento da recuperação de referências
-    observability/  # Registro e exposição de métricas
+    workers/        # Recuperação, publicação e consumo
+    observability/  # Logs JSON e métricas Prometheus
+    health/         # Verificação de dependências
     messaging/      # Consumo de transações, validação e publicação no SQS
 tests/
   integration/      # PostgreSQL real, HTTP e concorrência
@@ -91,7 +93,7 @@ tests/
 
 O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplicação usa um contrato de persistência; o módulo NestJS conecta esse contrato ao repository PostgreSQL. HTTP e SQS compartilham validação de entrada e o mesmo caso de uso financeiro.
 
-## Próximas etapas
+## Etapas implementadas
 
 1. Domínio financeiro e testes unitários — base implementada.
 2. PostgreSQL, MikroORM, migrations e abertura de wallet — implementados.
@@ -100,7 +102,7 @@ O domínio concentra as regras e não importa NestJS ou infraestrutura. A aplica
 5. Consultas e reconciliação — implementadas.
 6. Eventos, outbox e publisher SQS — implementados.
 7. Consumidor SQS, inbox, retry e DLQ — implementados.
-8. Observabilidade, testes de falhas distribuídas e documentação final.
+8. Health checks, observabilidade, testes de falhas distribuídas e documentação final — implementados.
 
 As decisões e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -121,7 +123,7 @@ WIN e LOSS podem referenciar uma BET com `referenceExternalTransactionId`. REFUN
 
 Referências ausentes são persistidas como pendentes. O worker roda a cada segundo, com backoff de 1 segundo até 5 minutos e expiração após 24 horas. O estado sobrevive a reinícios. `REFERENCE_RECOVERY_ENABLED=false` desativa apenas o agendamento. Referências ainda indisponíveis na checagem de expiração geram REFERENCE_NOT_FOUND. Reversão sem saldo usa REVERSAL_INSUFFICIENT_FUNDS.
 
-A regra de uma reversão por tipo permite um REFUND e um ROLLBACK da mesma BET; essa interpretação está documentada em ARCHITECTURE.md. Transições geram os eventos correspondentes na outbox, inclusive a rejeição por expiração. O consumidor de entrada aceita essas mesmas operações; o desafio ainda depende da etapa final de observabilidade.
+A regra de uma reversão por tipo permite um REFUND e um ROLLBACK da mesma BET; essa interpretação está documentada em ARCHITECTURE.md. Transições geram os eventos correspondentes na outbox, inclusive a rejeição por expiração. O consumidor de entrada aceita essas mesmas operações; a correlação é mantida até os eventos e a recuperação de referências.
 
 ## Consultas e reconciliação
 
@@ -139,7 +141,7 @@ O ledger retorna `{ "items": [...], "nextCursor": "..." }`. O limite padrão é 
 
 A reconciliação retorna saldo armazenado, soma calculada do ledger, `difference = storedBalance - calculatedBalance`, `consistent` e `checkedEntries`. Não altera dados. Uma divergência retorna 200 com `consistent: false`, gera log JSON sem valores financeiros e incrementa `wallet_reconciliation_mismatches_total`, exposto em `/metrics`. Aceita `X-Correlation-Id` opcional (até 128 letras, dígitos, pontos, underscores, dois-pontos ou hífens); quando ausente, gera um UUID.
 
-A métrica conta verificações com divergência por processo, sem labels por wallet, e reinicia com o processo. A instrumentação completa do desafio será adicionada na etapa de observabilidade.
+A métrica conta verificações com divergência por processo, sem labels por wallet, e reinicia com o processo. As demais métricas estão descritas abaixo.
 
 ## Eventos e outbox
 
@@ -188,3 +190,46 @@ Envie para a fila de entrada este envelope, substituindo playerId e walletId pel
 Processadas, rejeitadas por negócio e PENDING_REFERENCE recebem ack após commit. Falhas transitórias tentam novamente após 1, 2, 4 e 8 segundos; no quinto recebimento vão para a DLQ. Payload inválido ou conflito permanente vai diretamente para a DLQ. O corpo original é preservado com atributos failureCode, receiveCount, consumerName e sourceMessageId. Corrija a causa antes de reenviar: a identidade de uma operação confirmada não pode ser reutilizada com dados diferentes.
 
 O consumidor faz long polling de dois segundos, uma mensagem por vez por instância, com visibilidade de 60 segundos. Instâncias adicionais trabalham em paralelo. Em SIGTERM, interrompe o receive e aguarda o processamento e ack da mensagem em andamento antes de fechar os clientes.
+
+## Health checks e observabilidade
+
+```sh
+curl -i http://localhost:3000/health/live
+curl -i http://localhost:3000/health/ready
+curl http://localhost:3000/metrics
+```
+
+Liveness retorna 200 enquanto a aplicação atende. Readiness consulta PostgreSQL e as três filas configuradas, retornando 200 ou 503 com checks up/down, sem expor URLs ou credenciais. O prazo das verificações é 2,5 segundos. Health checks são públicos e independem dos flags de agendamento dos workers.
+
+Os logs de execução usam JSON, timestamp, nível, correlação e identificadores disponíveis. Payloads, saldos, keys de idempotência e parâmetros SQL não são registrados. Quando X-Correlation-Id não é informado, a entrada HTTP gera um identificador reutilizado pelo processamento financeiro.
+
+| Métrica                                | Significado                                                                                                      |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| wager_transactions_total{status,kind}  | Transições financeiras confirmadas, incluindo OPENING; replay e tentativa ainda pendente não repetem a transição |
+| wager_duplicates_total                 | Replays bem-sucedidos em HTTP ou SQS                                                                             |
+| processing_retries_total{component}    | Retentativas de entrada SQS, outbox e recuperação de referências                                                 |
+| sqs_dead_lettered_total                | Envios à DLQ confirmados pelo consumidor                                                                         |
+| database_lock_conflicts_total{code}    | Timeout de lock, deadlock e falha de serialização                                                                |
+| wager_processing_duration_seconds      | Histograma de duração da unidade financeira, incluindo falhas e replays                                          |
+| outbox_pending_messages                | Eventos confirmados ainda não publicados                                                                         |
+| outbox_lag_seconds                     | Idade do evento pendente mais antigo; zero quando não há pendências                                              |
+| wallet_reconciliation_mismatches_total | Verificações de reconciliação com divergência                                                                    |
+
+Counters e histograma pertencem ao processo e reiniciam com ele; não substituem auditoria persistente. As gauges da outbox são consultadas no PostgreSQL a cada scrape e representam o mesmo backlog compartilhado entre instâncias: não devem ser somadas. As labels usam categorias limitadas; IDs ficam somente nos logs. Redrive feito diretamente pelo SQS não incrementa o contador da aplicação e deve ser acompanhado também pelos atributos da fila/DLQ. Um scrape sem acesso ao banco retorna 503.
+
+Para repetir o smoke test do JavaScript compilado com banco e filas temporários:
+
+```sh
+bun run build
+bun tests/support/compiled-app-smoke.ts
+```
+
+Esse teste usa as mesmas configurações TEST_DATABASE_URL e TEST_SQS_ENDPOINT da integração e a porta HTTP 3107 livre. Verifica HTTP, replay, consumo SQS, publicação dos cinco eventos esperados, saldo reconciliado, métricas, logs JSON e encerramento SIGTERM. Os workers reais ficam habilitados nesse processo.
+
+## Escopo e limitações
+
+- Autenticação externa foi omitida conforme permitido pelo enunciado; ProviderIdentityGuard é o ponto de extensão. Não use o serviço publicamente sem integrar o IdP.
+- Não foram implementados os diferenciais opcionais: teste de carga, OpenTelemetry, dashboard e ledger de partidas dobradas.
+- A DLQ exige análise e reenvio operacional. A visibilidade de entrada não possui heartbeat; inbox e locks protegem contra efeito financeiro duplicado quando houver redelivery.
+- FAILED existe como estado terminal no domínio e schema. Erros que impedem a aceitação atômica não deixam transação financeira confirmada; falhas permanentes de entrada ficam auditadas na DLQ. Não existe um fluxo separado que persista uma aceitação e depois a marque FAILED.
+- O Compose executa PostgreSQL e LocalStack; a aplicação roda pelo Bun no host. Filas locais são efêmeras, enquanto o PostgreSQL de desenvolvimento usa volume persistente. Após recriar o LocalStack, o publisher retoma eventos ainda pendentes no banco; eventos já marcados como publicados não são republicados automaticamente.

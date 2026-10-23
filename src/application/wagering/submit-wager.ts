@@ -1,3 +1,4 @@
+import type { ProcessingObserver } from '../ports/processing-observer';
 import { randomUUID } from 'node:crypto';
 import {
   WagerTransaction,
@@ -19,12 +20,38 @@ import type { SubmitWagerInput, SubmitWagerResult } from './wager.contracts';
 import { createWagerEvents } from '../events/create-wager-events';
 
 export class SubmitWager {
-  constructor(private readonly unitOfWork: WageringUnitOfWork) {}
+  constructor(
+    private readonly unitOfWork: WageringUnitOfWork,
+    private readonly observer?: ProcessingObserver,
+  ) {}
 
   async execute(
     input: SubmitWagerInput,
     idempotencyKey: string,
     processingContext: WagerSubmissionContext = { correlationId: randomUUID() },
+  ): Promise<SubmitWagerResult> {
+    const started = performance.now();
+    const result = await this.perform(input, idempotencyKey, processingContext);
+    if (result.idempotentReplay) {
+      this.observer?.record({
+        event: 'wager_replayed',
+        transactionId: result.transactionId,
+        walletId: input.walletId,
+        providerId: input.providerId,
+        correlationId: processingContext.correlationId,
+        ...(processingContext.inbox
+          ? { messageId: processingContext.inbox.messageId }
+          : {}),
+        durationSeconds: (performance.now() - started) / 1000,
+      });
+    }
+    return result;
+  }
+
+  private async perform(
+    input: SubmitWagerInput,
+    idempotencyKey: string,
+    processingContext: WagerSubmissionContext,
   ): Promise<SubmitWagerResult> {
     if (!/^[\x21-\x7e]{1,255}$/.test(idempotencyKey)) {
       throw new DomainError(

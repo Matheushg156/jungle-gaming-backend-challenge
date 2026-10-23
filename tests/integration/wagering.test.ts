@@ -584,6 +584,10 @@ describe('Wager processing with real PostgreSQL', () => {
       expect(await response.json()).toMatchObject({
         code: 'DATABASE_UNAVAILABLE',
       });
+      const metrics = await fetch(`${baseUrl}/metrics`);
+      expect(await metrics.text()).toContain(
+        'database_lock_conflicts_total{code="55P03"} 1',
+      );
       expect(
         await database.orm.em
           .fork()

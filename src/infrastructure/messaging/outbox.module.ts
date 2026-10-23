@@ -1,3 +1,5 @@
+import { ProcessingObserver } from '../../application/ports/processing-observer';
+import { ObservabilityModule } from '../observability/observability.module';
 import { Module } from '@nestjs/common';
 import { PublishOutbox } from '../../application/events/publish-outbox';
 import { OutboxRepository } from '../../application/ports/outbox.repository';
@@ -7,7 +9,7 @@ import { OutboxPublisherWorker } from '../workers/outbox-publisher.worker';
 import { createLocalSqsClient, SqsEventPublisher } from './sqs-event.publisher';
 
 @Module({
-  imports: [PersistenceModule],
+  imports: [PersistenceModule, ObservabilityModule],
   providers: [
     OutboxPublisherWorker,
     {
@@ -24,8 +26,9 @@ import { createLocalSqsClient, SqsEventPublisher } from './sqs-event.publisher';
       useFactory: (
         outbox: OutboxRepository,
         publisher: IntegrationEventPublisher,
-      ) => new PublishOutbox(outbox, publisher),
-      inject: [OutboxRepository, IntegrationEventPublisher],
+        observer: ProcessingObserver,
+      ) => new PublishOutbox(outbox, publisher, observer),
+      inject: [OutboxRepository, IntegrationEventPublisher, ProcessingObserver],
     },
   ],
 })

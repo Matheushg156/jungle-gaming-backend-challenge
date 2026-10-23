@@ -1,3 +1,7 @@
+import {
+  JsonLogger,
+  writeOperationalLog,
+} from './infrastructure/observability/json-logger';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -15,14 +19,12 @@ async function bootstrap(): Promise<void> {
     throw new Error('PORT must be an integer between 1 and 65535');
   }
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { logger: new JsonLogger() });
   app.enableShutdownHooks();
   await app.listen(port, '0.0.0.0');
 }
 
-bootstrap().catch((error: unknown) => {
-  console.error(
-    error instanceof Error ? error.message : 'Application startup failed',
-  );
+bootstrap().catch(() => {
+  writeOperationalLog('error', { code: 'STARTUP_FAILED' });
   process.exitCode = 1;
 });

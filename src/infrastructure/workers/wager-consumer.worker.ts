@@ -1,3 +1,4 @@
+import { writeOperationalLog } from '../observability/json-logger';
 import {
   Inject,
   Injectable,
@@ -32,18 +33,17 @@ export class WagerConsumerWorker
       try {
         const result = await this.consumer.processNext(this.controller.signal);
         if (result.outcome !== 'EMPTY') {
-          console.log(
-            JSON.stringify({ component: 'wager-consumer', ...result }),
-          );
+          writeOperationalLog('info', {
+            component: 'wager-consumer',
+            ...result,
+          });
         }
       } catch {
         if (!this.controller.signal.aborted) {
-          console.error(
-            JSON.stringify({
-              component: 'wager-consumer',
-              code: 'QUEUE_TRANSPORT_RETRY',
-            }),
-          );
+          writeOperationalLog('warn', {
+            component: 'wager-consumer',
+            code: 'QUEUE_TRANSPORT_RETRY',
+          });
           await Bun.sleep(1000);
         }
       }

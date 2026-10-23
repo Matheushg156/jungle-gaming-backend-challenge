@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { InboxMessage } from '../../../src/domain/entities/inbox-message';
+import { InboxMessage } from '../../../../src/domain/entities/inbox-message';
 
 test('inbox binds immutable payload identity and has a terminal processed transition', () => {
   const receivedAt = new Date();

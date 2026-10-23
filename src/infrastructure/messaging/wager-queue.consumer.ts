@@ -1,3 +1,4 @@
+import type { ProcessingObserver } from '../../application/ports/processing-observer';
 import { createHash } from 'node:crypto';
 import {
   SQSClient,
@@ -53,6 +54,7 @@ export class WagerQueueConsumer {
     private readonly dlqUrl: string,
     private readonly submit: SubmitWager,
     options: ConsumerOptions = {},
+    private readonly observer?: ProcessingObserver,
   ) {
     this.waitTimeSeconds = options.waitTimeSeconds ?? 2;
     this.visibilitySeconds = options.visibilitySeconds ?? 60;
@@ -145,6 +147,11 @@ export class WagerQueueConsumer {
           VisibilityTimeout: delay,
         }),
       );
+      this.observer?.record({
+        event: 'queue_retry',
+        code: failure.code,
+        messageId: message.MessageId ?? 'unknown',
+      });
       return {
         outcome: 'RETRY' as const,
         brokerMessageId: message.MessageId,
@@ -176,6 +183,11 @@ export class WagerQueueConsumer {
         },
       }),
     );
+    this.observer?.record({
+      event: 'queue_dead_lettered',
+      code: failure.code,
+      messageId: message.MessageId ?? 'unknown',
+    });
     await this.client.send(
       new DeleteMessageCommand({
         QueueUrl: this.queueUrl,

@@ -421,4 +421,63 @@ describe('Transactional outbox with PostgreSQL and LocalStack SQS', () => {
       }
     }
   }, 15000);
+  test('a new publisher process recovers events after SIGKILL before publication', async () => {
+    const loss = await createLoss();
+    const spawn = () => {
+      const child = Bun.spawn(
+        [process.execPath, 'tests/support/outbox-publisher-process.ts'],
+        {
+          env: {
+            ...process.env,
+            WAGER_TEST_DATABASE_URL: database.url,
+            TEST_EVENTS_QUEUE_URL: queue.queueUrl,
+          },
+          stdin: 'pipe',
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      );
+      return { child, reader: child.stdout.getReader() };
+    };
+    const killed = spawn();
+    let restarted: ReturnType<typeof spawn> | undefined;
+    try {
+      expect(new TextDecoder().decode((await killed.reader.read()).value)).toBe(
+        'READY\n',
+      );
+      killed.child.kill('SIGKILL');
+      await killed.child.exited;
+      expect((await eventsFor(loss.transactionId))[0]?.publishedAt).toBeNull();
+      expect(await queue.receiveAll(1)).toHaveLength(0);
+      restarted = spawn();
+      expect(
+        new TextDecoder().decode((await restarted.reader.read()).value),
+      ).toBe('READY\n');
+      await restarted.child.stdin.end();
+      let output = '';
+      while (true) {
+        const chunk = await restarted.reader.read();
+        if (chunk.done) {
+          break;
+        }
+        output += new TextDecoder().decode(chunk.value);
+      }
+      expect(await restarted.child.exited).toBe(0);
+      expect(output).toContain('PUBLISHED:1');
+      expect(await queue.receiveAll(1)).toHaveLength(1);
+      expect(
+        (await eventsFor(loss.transactionId))[0]?.publishedAt,
+      ).not.toBeNull();
+    } finally {
+      for (const process of [killed.child, restarted?.child]) {
+        if (process && process.exitCode === null) {
+          process.kill('SIGKILL');
+        }
+      }
+      await killed.child.exited;
+      if (restarted) {
+        await restarted.child.exited;
+      }
+    }
+  }, 15000);
 });

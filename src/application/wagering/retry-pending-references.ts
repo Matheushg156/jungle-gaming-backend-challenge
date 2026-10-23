@@ -1,3 +1,4 @@
+import type { ProcessingObserver } from '../ports/processing-observer';
 import { WagerTransactionStatus } from '../../domain/entities/wager-transaction';
 import { WageringUnitOfWork } from '../ports/wagering-unit-of-work';
 import { applyWager } from './apply-wager';
@@ -6,7 +7,10 @@ import { ReferenceRetryPolicy } from './reference-retry-policy';
 import { createWagerEvents } from '../events/create-wager-events';
 
 export class RetryPendingReferences {
-  constructor(private readonly unitOfWork: WageringUnitOfWork) {}
+  constructor(
+    private readonly unitOfWork: WageringUnitOfWork,
+    private readonly observer?: ProcessingObserver,
+  ) {}
 
   async execute(now = new Date(), limit = 50): Promise<number> {
     const candidates = await this.unitOfWork.findDueReferences(now, limit);
@@ -62,6 +66,10 @@ export class RetryPendingReferences {
         );
         if (processed) {
           attempted += 1;
+          this.observer?.record({
+            event: 'reference_retry',
+            walletId: candidate.walletId,
+          });
         }
       } catch (error: unknown) {
         failures.push(error);
