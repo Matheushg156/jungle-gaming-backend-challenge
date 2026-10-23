@@ -4,6 +4,8 @@
   "private": true,
   "description": "Distributed wagering processor for the Jungle Gaming technical challenge",
   "scripts": {
+    "test": "bun test tests",
+    "test:unit": "bun test tests/unit",
     "dev": "bun --watch src/main.ts",
     "start": "bun src/main.ts",
     "start:prod": "bun dist/main.js",
@@ -17,6 +19,7 @@
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
+    "decimal.js": "^10.6.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },

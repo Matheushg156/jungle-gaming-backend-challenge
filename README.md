@@ -4,7 +4,7 @@ Implementação incremental do desafio técnico de processamento distribuído de
 
 ## Estado atual
 
-Base NestJS com TypeScript estrito e execução em Bun. As regras financeiras, endpoints, PostgreSQL e SQS ainda não estão implementados.
+Base NestJS com TypeScript estrito e execução em Bun, com as classes de domínio Money, Wallet, WalletLedgerEntry e WagerTransaction e seus testes unitários. Endpoints, processamento transacional, PostgreSQL e SQS ainda não estão implementados.
 
 ## Requisitos locais
 
@@ -23,6 +23,7 @@ O Bun carrega `.env` automaticamente. `PORT` é opcional e usa `3000` por padrã
 
 ```sh
 bun run lint
+bun run test
 bun run typecheck
 bun run format:check
 bun run build
@@ -31,11 +32,30 @@ bun run start:prod
 
 `build` usa o compilador TypeScript para emitir JavaScript com metadados de decorators, utilizados pela injeção de dependências do NestJS.
 
-Ainda não há testes automatizados: eles serão introduzidos com as primeiras regras de domínio e executados pelo runner do Bun. A inicialização HTTP é verificada como smoke test nesta etapa.
+Os testes unitários usam o runner do Bun e ficam em `tests/unit/domain`, espelhando a estrutura de `src/domain`. Cobrem precisão monetária, invariantes da wallet, aritmética do ledger, referências, transições e comparação do hash de payload. `bun run test:unit` executa apenas essa categoria; `bun run test` executa todos os testes. Ainda não há testes de integração ou concorrência real.
+
+## Organização das pastas
+
+```text
+src/
+  main.ts
+  app.module.ts
+  domain/
+    entities/       # Wallet (aggregate root), transações e lançamentos
+    value-objects/  # Money
+    errors/         # Erros de domínio
+tests/
+  unit/
+    domain/
+      entities/
+      value-objects/
+```
+
+O domínio concentra as regras e não importa NestJS ou infraestrutura. As camadas de aplicação, HTTP, persistência e mensageria serão criadas conforme forem implementadas.
 
 ## Próximas etapas
 
-1. Domínio financeiro e testes unitários.
+1. Domínio financeiro e testes unitários — base implementada.
 2. PostgreSQL, MikroORM, migrations e abertura de wallet.
 3. Processamento HTTP, idempotência e concorrência.
 4. SQS, inbox, outbox e recuperação de falhas.
