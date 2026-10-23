@@ -1,0 +1,24 @@
+meta {
+  name: 15 - Transação por ID externo
+  type: http
+  seq: 15
+}
+
+get {
+  url: {{baseUrl}}/providers/provider-a/wagering/transactions/{{runId}}-bet
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerAToken}}
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().transactionId).to.equal(bru.getVar("transactionId"));
+  });
+}

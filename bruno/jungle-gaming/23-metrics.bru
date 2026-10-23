@@ -1,0 +1,25 @@
+meta {
+  name: 23 - Métricas com operador
+  type: http
+  seq: 23
+}
+
+get {
+  url: {{baseUrl}}/metrics
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody()).to.be.a("string");
+    expect(res.getBody()).to.include("wager_transactions_total");
+  });
+}

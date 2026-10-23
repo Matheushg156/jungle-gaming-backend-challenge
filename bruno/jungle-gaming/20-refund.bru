@@ -1,0 +1,48 @@
+meta {
+  name: 20 - REFUND da BET restaura 100
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{baseUrl}}/wagering/transactions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerAToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: provider-a:{{runId}}:refund
+  X-Correlation-Id: demo-{{runId}}
+}
+
+body:json {
+  {
+    "providerId": "provider-a",
+    "externalTransactionId": "{{runId}}-refund",
+    "playerId": "{{playerId}}",
+    "walletId": "{{walletId}}",
+    "roundId": "{{runId}}-round",
+    "gameId": "demo-game",
+    "kind": "REFUND",
+    "money": {
+      "amount": "25.00",
+      "currency": "BRL"
+    },
+    "referenceExternalTransactionId": "{{runId}}-bet"
+  }
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().balance.amount).to.equal("100.00");
+    expect(res.getBody().status).to.equal("PROCESSED");
+  });
+}

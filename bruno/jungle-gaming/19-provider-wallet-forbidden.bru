@@ -1,0 +1,21 @@
+meta {
+  name: 19 - Provedor tentando rota administrativa
+  type: http
+  seq: 19
+}
+
+get {
+  url: {{baseUrl}}/wallets/{{walletId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerAToken}}
+}
+
+tests {
+  test("HTTP 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}

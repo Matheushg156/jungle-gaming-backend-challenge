@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings=0",
     "format:check": "prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test:auth": "TEST_OIDC_ISSUER=http://localhost:8080/realms/jungle bun test tests/integration/auth.test.ts tests/integration/oidc-verifier.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.1156.0",
@@ -31,6 +32,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "decimal.js": "^10.6.0",
+    "jose": "^6.2.13",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },

@@ -1,6 +1,6 @@
 # Roteiro de apresentação — Distributed Wagering Processor
 
-Duração sugerida: 10 a 15 minutos. Use os comandos do README para subir PostgreSQL/LocalStack, aplicar migrations e iniciar a aplicação. Não rode testes que injetam falhas contra o banco de desenvolvimento: os helpers usam bancos e filas exclusivos de teste.
+Duração sugerida: 10 a 15 minutos. Use os comandos do README para subir PostgreSQL/LocalStack/Keycloak, aplicar migrations e iniciar a aplicação. Nesta branch, siga AUTHENTICATION.md para obter tokens; use operador nas rotas de wallet/métricas e provider-a nas apostas do provider-a. Não rode testes que injetam falhas contra o banco de desenvolvimento: os helpers usam bancos e filas exclusivos de teste.
 
 ## 1. Problema e garantias — 2 minutos
 
@@ -54,7 +54,7 @@ bun run build
 bun tests/support/compiled-app-smoke.ts
 ```
 
-Feche com as decisões de escopo: autenticação externa omitida conforme permitido, guard preparado para IdP, sem teste de carga ou dashboard opcional. Mencione as limitações documentadas: soma do ledger nos triggers, ausência de heartbeat de visibilidade e operação manual da DLQ. Discuta evoluções com base em medição de contenção e volume.
+Feche com as decisões de escopo: autenticação externa via Keycloak nesta branch, client_credentials e isolamento por providerId; sem teste de carga ou dashboard opcional. Mencione as limitações documentadas: soma do ledger nos triggers, ausência de heartbeat de visibilidade e operação manual da DLQ. Discuta evoluções com base em medição de contenção e volume.
 
 ## Perguntas para preparar
 
@@ -66,3 +66,9 @@ Feche com as decisões de escopo: autenticação externa omitida conforme permit
 - O que acontece quando o banco confirma e o processo morre antes de registrar uma métrica ou fazer ack?
 - Como observar cada instância sem somar várias vezes o mesmo backlog da outbox?
 - Quais garantias continuam válidas se o FIFO entregar duplicatas?
+
+## Extra: autenticação OIDC — 2 minutos
+
+Mostre o realm local do Keycloak e as service accounts. Obtenha token de operador para criar uma wallet e token de provider-a para submeter uma aposta. Mostre 401 sem token e 403 ao tentar enviar providerId=provider-b com token de provider-a. Consulte a mesma transação com tokens dos dois provedores: apenas o correspondente deve receber os dados. Health permanece público; wallet e métricas exigem operador. O guia AUTHENTICATION.md traz os requests para Bruno/Postman.
+
+Explique que a aplicação valida tokens emitidos pelo IdP, usando chaves públicas JWKS. Ela não recebe senha do jogador nem possui tabela de senhas. Os JWTs são verificados localmente, com expiração curta; a indisponibilidade temporária do IdP pode ser tolerada quando as chaves já estão em cache. Não exponha tokens ou client secrets no terminal compartilhado durante a apresentação.

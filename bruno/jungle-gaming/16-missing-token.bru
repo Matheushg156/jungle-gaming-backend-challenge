@@ -1,0 +1,21 @@
+meta {
+  name: 16 - Sem token retorna 401
+  type: http
+  seq: 16
+}
+
+get {
+  url: {{baseUrl}}/wallets/{{walletId}}
+  body: none
+  auth: none
+}
+
+tests {
+  test("HTTP 401", function () {
+    expect(res.getStatus()).to.equal(401);
+  });
+}
+
+docs {
+  Erro esperado. Auth none é intencional.
+}

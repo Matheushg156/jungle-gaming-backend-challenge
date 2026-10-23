@@ -40,11 +40,21 @@ O rollback da segunda migration remove o snapshot do resultado. Para preservar r
 
 ## Autenticação
 
-A integração com Identity Provider fica fora da implementação inicial, pois não pontua no desafio. O `ProviderIdentityGuard` é o ponto de extensão explícito e atualmente permite todas as requisições de wallets e apostas. Uma evolução poderá validar tokens OIDC de um IdP externo, associar a identidade autenticada ao providerId e proteger as rotas de negócio. Health checks permanecerão públicos. Não haverá armazenamento próprio de senhas.
+Na main, autenticação foi omitida conforme permitido pelo desafio. Nesta branch de extras, AuthModule conecta a porta AccessTokenVerifier ao Keycloak. ProviderIdentityGuard valida Bearer tokens e aplica autorização por provedor ou papel operador. O fluxo é client_credentials, adequado à integração entre provedores e API. Não há tabela própria de usuários nem emissão artesanal de tokens.
+
+A implementação usa jose.jwtVerify com RS256, issuer/audience configurados, sub/iat/exp obrigatórios, validação temporal e chaves de uma URL JWKS confiável configurada no servidor. URLs indicadas no próprio token não são utilizadas. O claim de access token typ=Bearer impede uso de ID token. O cache JWKS tem prazo de dez minutos e suporta resolução de chaves novas com cooldown de cinco segundos; cada fetch tem timeout de dois segundos. Rotação e assinatura permanecem a cargo do IdP. Tokens já verificáveis com chaves em cache não exigem consulta remota a cada requisição. Como JWTs são verificados localmente, revogação de uma service account não invalida imediatamente access tokens já emitidos: o realm local limita sua duração a cinco minutos.
+
+O papel operator permite administração de wallets, reconciliação, consulta ampla de transações e métricas. O papel provider exige provider_id atribuído pelo IdP: submissão deve ter o mesmo providerId, consultas por provedor devem coincidir com o claim, e consultas por ID interno verificam a propriedade da transação. Wallets são compartilhadas entre provedores no modelo financeiro original e não possuem proprietário providerId; por isso suas rotas são administrativas em vez de introduzir uma falsa propriedade. Operações financeiras continuam validadas pelo domínio após autorização.
+
+A consulta por ID verifica autorização antes do controller e é repetida pelo controller. A identidade da transação é imutável, portanto não muda entre as leituras. Isso custa uma consulta adicional; uma futura porta de leitura filtrada poderia combinar busca e autorização. 401 indica credencial ausente/inválida/expirada; 403 indica identidade autenticada sem permissão; 503 indica indisponibilidade das chaves do IdP. Nunca são registrados tokens, headers Authorization ou client secrets.
+
+Health checks continuam públicos e consultam PostgreSQL/SQS. /metrics exige operador. A entrada SQS continua como canal interno confiável, sem Bearer token, sujeita à validação de domínio e à identidade presente na mensagem. AUTH_ENABLED é true por padrão; o modo false é explícito, destinado à demonstração do escopo original e às suítes financeiras. As suítes OIDC verificam assinatura/claims por um servidor JWKS de teste e autorização com tokens de um Keycloak real em Docker. Não alteram o domínio ou as fronteiras transacionais.
+
+O Compose usa uma imagem fixada, start-dev e importação automática do realm, conforme a [documentação de containers do Keycloak](https://www.keycloak.org/server/containers). O realm local contém dois provedores e um operador, todos service accounts sem password grant. Credenciais fixas, HTTP local e H2 efêmero servem somente à demonstração. Em produção, configure PostgreSQL persistente para o IdP, TLS, clientes/segredos próprios e permissões mínimas. A importação inicial não substitui um realm existente; alterações no JSON exigem recriar somente o container local do Keycloak, sem apagar dados financeiros.
 
 ## Limites de escopo
 
-Autenticação externa e os diferenciais opcionais não foram implementados. As limitações operacionais de mensageria e observabilidade são explicitadas nas seções abaixo.
+Autenticação externa foi adicionada nesta branch. Teste de carga, OpenTelemetry, dashboard e partidas dobradas ainda não foram implementados. As limitações operacionais de mensageria e observabilidade são explicitadas nas seções abaixo.
 
 ## Domínio financeiro
 

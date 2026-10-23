@@ -1,0 +1,47 @@
+meta {
+  name: 17 - Token B tentando enviar operação de A
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{baseUrl}}/wagering/transactions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerBToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: provider-a:{{runId}}:bet
+  X-Correlation-Id: demo-{{runId}}
+}
+
+body:json {
+  {
+    "providerId": "provider-a",
+    "externalTransactionId": "{{runId}}-bet",
+    "playerId": "{{playerId}}",
+    "walletId": "{{walletId}}",
+    "roundId": "{{runId}}-round",
+    "gameId": "demo-game",
+    "kind": "BET",
+    "money": {
+      "amount": "25.00",
+      "currency": "BRL"
+    }
+  }
+}
+
+tests {
+  test("HTTP 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  Erro esperado: identidade do provedor no token não coincide com o payload.
+}

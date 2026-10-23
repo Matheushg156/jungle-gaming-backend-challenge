@@ -1,0 +1,31 @@
+meta {
+  name: 27 - Reconciliação final - cinco lançamentos
+  type: http
+  seq: 27
+}
+
+post {
+  url: {{baseUrl}}/wallets/{{walletId}}/reconciliation
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().consistent).to.equal(true);
+    expect(res.getBody().storedBalance.amount).to.equal("100.00");
+    expect(res.getBody().difference.amount).to.equal("0.00");
+    expect(res.getBody().checkedEntries).to.equal(5);
+  });
+}
+
+docs {
+  Ledger esperado: OPENING, BET, REFUND, WIN e ROLLBACK. LOSS, rejeição, conflitos e replays não geram lançamentos.
+}

@@ -1,0 +1,24 @@
+meta {
+  name: 11 - Consultar saldo de 75
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/wallets/{{walletId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().balance.amount).to.equal("75.00");
+  });
+}

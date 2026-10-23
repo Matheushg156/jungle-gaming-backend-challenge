@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "Jungle Gaming — apresentação",
+  "type": "collection",
+  "ignore": ["node_modules", ".git", "reports"]
+}

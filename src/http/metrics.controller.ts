@@ -1,3 +1,5 @@
+import { UseGuards } from '@nestjs/common';
+import { ProviderIdentityGuard, OperatorOnly } from './provider-identity.guard';
 import { MikroORM } from '@mikro-orm/postgresql';
 import {
   Controller,
@@ -9,6 +11,8 @@ import {
 import { Registry } from '@prometheus-io/client';
 import { ApplicationMetrics } from '../infrastructure/observability/application-metrics';
 
+@OperatorOnly()
+@UseGuards(ProviderIdentityGuard)
 @Controller('metrics')
 export class MetricsController {
   constructor(

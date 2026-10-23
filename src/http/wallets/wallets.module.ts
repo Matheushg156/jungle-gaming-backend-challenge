@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { WalletRepository } from '../../application/ports/wallet.repository';
 import { OpenWallet } from '../../application/wallets/open-wallet';
 import { PersistenceModule } from '../../infrastructure/persistence/persistence.module';
-import { ProviderIdentityGuard } from '../provider-identity.guard';
+import { AuthModule } from '../../infrastructure/auth/auth.module';
 import { WalletsController } from './wallets.controller';
 import { ListWalletLedger } from '../../application/wallets/list-wallet-ledger';
 import { ReconcileWallet } from '../../application/wallets/reconcile-wallet';
@@ -11,10 +11,9 @@ import { ReconciliationObserver } from '../../application/ports/reconciliation-o
 import { ObservabilityModule } from '../../infrastructure/observability/observability.module';
 
 @Module({
-  imports: [PersistenceModule, ObservabilityModule],
+  imports: [AuthModule, PersistenceModule, ObservabilityModule],
   controllers: [WalletsController],
   providers: [
-    ProviderIdentityGuard,
     {
       provide: ListWalletLedger,
       useFactory: (wallets: WalletReadRepository) =>

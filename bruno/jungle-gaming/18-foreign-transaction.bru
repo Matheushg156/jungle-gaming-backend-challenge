@@ -1,0 +1,21 @@
+meta {
+  name: 18 - Token B tentando ler transação de A
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/wagering/transactions/{{transactionId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerBToken}}
+}
+
+tests {
+  test("HTTP 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}

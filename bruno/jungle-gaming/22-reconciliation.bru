@@ -1,0 +1,27 @@
+meta {
+  name: 22 - Reconciliação após REFUND
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{baseUrl}}/wallets/{{walletId}}/reconciliation
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().consistent).to.equal(true);
+    expect(res.getBody().difference.amount).to.equal("0.00");
+    expect(res.getBody().storedBalance.amount).to.equal("100.00");
+    expect(res.getBody().checkedEntries).to.equal(3);
+  });
+}

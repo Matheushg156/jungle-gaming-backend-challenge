@@ -1,0 +1,25 @@
+meta {
+  name: 14 - Transação por ID interno
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/wagering/transactions/{{transactionId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerAToken}}
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().status).to.equal("PROCESSED");
+    expect(res.getBody().providerId).to.equal("provider-a");
+  });
+}

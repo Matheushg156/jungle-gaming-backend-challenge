@@ -1,6 +1,29 @@
 name: jungle-games
 
 services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.7
+    profiles: ['auth']
+    command: ['start-dev', '--import-realm']
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: local-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: local-admin-only
+      KC_HOSTNAME: http://localhost:8080
+      KC_HEALTH_ENABLED: 'true'
+    ports:
+      - '127.0.0.1:8080:8080'
+    volumes:
+      - ./docker/keycloak/jungle-realm.json:/opt/keycloak/data/import/jungle-realm.json:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; read -r line <&3; [[ $$line == *200* ]]'",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
   localstack:
     image: localstack/localstack:4.0.3
     environment:

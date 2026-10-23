@@ -1,0 +1,56 @@
+meta {
+  name: 06 - Criar wallet com 100 BRL
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/wallets
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "playerId": "{{playerId}}",
+    "initialBalance": {
+      "amount": "100.00",
+      "currency": "BRL"
+    }
+  }
+}
+
+script:pre-request {
+  bru.setVar("runId", bru.interpolate("{{$randomUUID}}"));
+  bru.setVar("playerId", bru.interpolate("{{$randomUUID}}"));
+  bru.setVar("walletId", "");
+  bru.setVar("transactionId", "");
+  bru.setVar("ledgerCursor", "");
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setVar("walletId", res.getBody().id);
+  }
+}
+
+tests {
+  test("HTTP 201", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().balance).to.deep.equal({amount: "100.00", currency: "BRL"});
+  });
+}
+
+docs {
+  Gera um jogador e runId novos a cada execução e salva walletId. Para reiniciar a demonstração, execute esta requisição e siga a ordem novamente.
+}

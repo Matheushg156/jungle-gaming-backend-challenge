@@ -2,6 +2,8 @@
 
 Implementação incremental do desafio técnico de processamento distribuído de apostas.
 
+Branch de extras: autenticação OIDC habilitada por padrão. Consulte [AUTHENTICATION.md](AUTHENTICATION.md) para emitir tokens de demonstração e autorizar as requisições. Os exemplos financeiros precisam do header Authorization descrito nesse guia.
+
 ## Estado atual
 
 Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com MikroORM, migrations reversíveis e abertura transacional de wallet. Disponíveis: `POST /wallets`, `GET /wallets/:walletId` e `POST /wagering/transactions` para BET, WIN, LOSS, REFUND e ROLLBACK, com idempotência persistente, concorrência por wallet e recuperação de referências. As consultas de transações, o ledger paginado e a reconciliação também estão disponíveis. Eventos e outbox são persistidos atomicamente e publicados em SQS via LocalStack. O consumidor SQS, a inbox persistente e retry/DLQ também estão implementados. Health checks, logs JSON e métricas operacionais estão implementados. As limitações e decisões de escopo estão em ARCHITECTURE.md.
@@ -16,7 +18,7 @@ Base NestJS com TypeScript estrito e Bun, domínio financeiro, PostgreSQL com Mi
 ```sh
 bun install --frozen-lockfile
 cp .env.example .env
-docker compose up -d --wait postgres localstack
+docker compose --profile auth up -d --wait postgres localstack keycloak
 bun run migration:up
 bun run dev
 ```
@@ -29,7 +31,7 @@ curl -i http://localhost:3000/wallets \
   -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"100.00","currency":"BRL"}}'
 ```
 
-A criação retorna `201`; duplicação de jogador/moeda retorna `409`; entrada inválida retorna `400`. A consulta retorna `200` ou `404` para wallet inexistente. A autenticação externa foi omitida conforme permitido: o guard atual permite as requisições e é o ponto de extensão para um IdP externo.
+A criação retorna `201`; duplicação de jogador/moeda retorna `409`; entrada inválida retorna `400`. A consulta retorna `200` ou `404` para wallet inexistente. Nesta branch de extras, os endpoints financeiros exigem Bearer tokens do Keycloak. Wallets e métricas exigem operador; submissão e consulta de transações aceitam o provedor correspondente. Veja AUTHENTICATION.md antes de executar os exemplos HTTP abaixo.
 
 ```sh
 bun run lint
@@ -132,7 +134,7 @@ curl http://localhost:3000/wagering/transactions/TRANSACTION_ID
 curl http://localhost:3000/providers/provider-a/wagering/transactions/bet-1
 curl 'http://localhost:3000/wallets/WALLET_ID/ledger?limit=50'
 curl -X POST http://localhost:3000/wallets/WALLET_ID/reconciliation
-curl http://localhost:3000/metrics
+curl -H 'Authorization: Bearer SEU_TOKEN_OPERADOR' http://localhost:3000/metrics
 ```
 
 As consultas retornam 200; recursos inexistentes retornam 404; identificadores ou parâmetros inválidos retornam 400. A consulta de transação inclui `result`, com o snapshot persistido do processamento, ou null para OPENING. Não expõe hash ou idempotency key.
@@ -196,10 +198,10 @@ O consumidor faz long polling de dois segundos, uma mensagem por vez por instân
 ```sh
 curl -i http://localhost:3000/health/live
 curl -i http://localhost:3000/health/ready
-curl http://localhost:3000/metrics
+curl -H 'Authorization: Bearer SEU_TOKEN_OPERADOR' http://localhost:3000/metrics
 ```
 
-Liveness retorna 200 enquanto a aplicação atende. Readiness consulta PostgreSQL e as três filas configuradas, retornando 200 ou 503 com checks up/down, sem expor URLs ou credenciais. O prazo das verificações é 2,5 segundos. Health checks são públicos e independem dos flags de agendamento dos workers.
+Liveness retorna 200 enquanto a aplicação atende. Readiness consulta PostgreSQL e as três filas configuradas, retornando 200 ou 503 com checks up/down, sem expor URLs ou credenciais. O prazo das verificações é 2,5 segundos. Health checks são públicos e independem dos flags de agendamento dos workers. /metrics exige token de operador quando AUTH_ENABLED=true. Readiness verifica as dependências financeiras PostgreSQL/SQS; indisponibilidade do JWKS é reportada como 503 na autenticação quando não há chave utilizável em cache.
 
 Os logs de execução usam JSON, timestamp, nível, correlação e identificadores disponíveis. Payloads, saldos, keys de idempotência e parâmetros SQL não são registrados. Quando X-Correlation-Id não é informado, a entrada HTTP gera um identificador reutilizado pelo processamento financeiro.
 
@@ -228,7 +230,7 @@ Esse teste usa as mesmas configurações TEST_DATABASE_URL e TEST_SQS_ENDPOINT d
 
 ## Escopo e limitações
 
-- Autenticação externa foi omitida conforme permitido pelo enunciado; ProviderIdentityGuard é o ponto de extensão. Não use o serviço publicamente sem integrar o IdP.
+- Nesta branch, autenticação externa está implementada com Keycloak/JWKS. O realm e seus segredos são exclusivos de desenvolvimento; as configurações de produção exigem IdP persistente, HTTPS e gestão de segredos.
 - Não foram implementados os diferenciais opcionais: teste de carga, OpenTelemetry, dashboard e ledger de partidas dobradas.
 - A DLQ exige análise e reenvio operacional. A visibilidade de entrada não possui heartbeat; inbox e locks protegem contra efeito financeiro duplicado quando houver redelivery.
 - FAILED é persistido quando uma operação já aceita como PENDING_REFERENCE sofre uma falha permanente de integridade na recuperação. Erros anteriores à aceitação atômica não criam uma transação financeira artificial e ficam auditados na DLQ.

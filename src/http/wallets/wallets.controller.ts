@@ -19,13 +19,17 @@ import { WalletRepository } from '../../application/ports/wallet.repository';
 import { OpenWallet } from '../../application/wallets/open-wallet';
 import { Wallet } from '../../domain/entities/wallet';
 import { DomainError } from '../../domain/errors/domain-error';
-import { ProviderIdentityGuard } from '../provider-identity.guard';
+import {
+  ProviderIdentityGuard,
+  OperatorOnly,
+} from '../provider-identity.guard';
 import { readCorrelationId } from '../read-correlation-id';
 import { CreateWalletDto } from './create-wallet.dto';
 import { LedgerQueryDto } from './ledger-query.dto';
 import { ListWalletLedger } from '../../application/wallets/list-wallet-ledger';
 import { ReconcileWallet } from '../../application/wallets/reconcile-wallet';
 
+@OperatorOnly()
 @Controller('wallets')
 @UseGuards(ProviderIdentityGuard)
 export class WalletsController {

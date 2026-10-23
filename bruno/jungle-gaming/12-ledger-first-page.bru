@@ -1,0 +1,31 @@
+meta {
+  name: 12 - Ledger primeira página
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/wallets/{{walletId}}/ledger?limit=1
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setVar("ledgerCursor", res.getBody().nextCursor);
+  }
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().items).to.have.lengthOf(1);
+    expect(res.getBody().nextCursor).to.be.a("string");
+  });
+}

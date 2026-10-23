@@ -1,0 +1,40 @@
+meta {
+  name: 03 - Token Operador
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{issuer}}/protocol/openid-connect/token
+  body: formUrlEncoded
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+}
+
+body:form-urlencoded {
+  grant_type: client_credentials
+  client_id: {{operatorClientId}}
+  client_secret: {{operatorClientSecret}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setVar("operatorToken", res.getBody().access_token);
+  }
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().access_token).to.be.a("string").and.not.empty;
+  });
+}
+
+docs {
+  Salva o access token somente nas variáveis de runtime. Não grava token no ambiente nem em arquivos. Expira em cinco minutos; reexecute para renovar.
+}
