@@ -31,7 +31,7 @@ Execute as requisições na ordem numérica ou rode a collection inteira de form
 | Requisições | Cenário                                     | Resultado                                             |
 | ----------- | ------------------------------------------- | ----------------------------------------------------- |
 | 01–02       | Liveness/readiness sem token                | 200; banco e SQS prontos                              |
-| 03–05       | Tokens de operador, provider-a e provider-b | Tokens salvos no ambiente local                              |
+| 03–05       | Tokens de operador, provider-a e provider-b | Tokens salvos no ambiente local                       |
 | 06          | Criação da wallet                           | Novo jogador, saldo 100.00 e walletId salvo           |
 | 07–08       | BET de 25.00 e replay                       | Saldo 75.00; um único débito                          |
 | 09          | Mesma key com valor diferente               | 409 esperado                                          |
