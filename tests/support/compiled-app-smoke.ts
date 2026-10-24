@@ -19,6 +19,7 @@ async function run() {
   const server = Bun.spawn([process.execPath, 'dist/main.js'], {
     env: {
       ...process.env,
+      AUTH_ENABLED: 'false',
       DATABASE_URL: database.url,
       PORT: '3107',
       SQS_ENDPOINT: process.env.TEST_SQS_ENDPOINT ?? 'http://localhost:4567',

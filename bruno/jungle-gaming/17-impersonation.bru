@@ -1,0 +1,54 @@
+meta {
+  name: 17 - Token B tentando enviar operação de A
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{baseUrl}}/wagering/transactions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerBToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: provider-a:{{runId}}:bet
+  X-Correlation-Id: demo-{{runId}}
+}
+
+body:json {
+  {
+    "providerId": "provider-a",
+    "externalTransactionId": "{{runId}}-bet",
+    "playerId": "{{playerId}}",
+    "walletId": "{{walletId}}",
+    "roundId": "{{runId}}-round",
+    "gameId": "demo-game",
+    "kind": "BET",
+    "money": {
+      "amount": "25.00",
+      "currency": "BRL"
+    }
+  }
+}
+
+script:pre-request {
+  const accessToken = bru.getEnvVar("providerBToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
+  }
+}
+
+tests {
+  test("HTTP 403", function () {
+    expect(res.getStatus()).to.equal(403);
+  });
+}
+
+docs {
+  Erro esperado: identidade do provedor no token não coincide com o payload.
+}

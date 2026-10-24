@@ -1,3 +1,4 @@
+import { AuthModule } from '../auth/auth.module';
 import { Module } from '@nestjs/common';
 import { MikroORM } from '@mikro-orm/postgresql';
 import { HealthController } from '../../http/health.controller';
@@ -8,7 +9,7 @@ import { createLocalSqsClient } from '../messaging/sqs-event.publisher';
 import { ObservabilityModule } from './observability.module';
 
 @Module({
-  imports: [PersistenceModule, ObservabilityModule],
+  imports: [PersistenceModule, ObservabilityModule, AuthModule],
   controllers: [HealthController, MetricsController],
   providers: [
     {

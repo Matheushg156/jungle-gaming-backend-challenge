@@ -1,0 +1,3 @@
+reports/
+*.local.bru
+environments/*.local.bru

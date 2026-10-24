@@ -1,0 +1,36 @@
+meta {
+  name: 13 - Ledger próxima página
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/wallets/{{walletId}}/ledger?limit=1&cursor={{ledgerCursor}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+script:pre-request {
+  const accessToken = bru.getEnvVar("operatorToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
+  }
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().items).to.have.lengthOf(1);
+    expect(res.getBody().nextCursor).to.equal(null);
+  });
+}
+
+docs {
+  Usa o cursor retornado pela requisição anterior. O ledger tem OPENING e BET neste ponto; a aposta rejeitada não gera lançamento.
+}

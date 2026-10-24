@@ -1,0 +1,57 @@
+meta {
+  name: 09 - Mesma key com valor diferente
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/wagering/transactions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerAToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: provider-a:{{runId}}:bet
+  X-Correlation-Id: demo-{{runId}}
+}
+
+body:json {
+  {
+    "providerId": "provider-a",
+    "externalTransactionId": "{{runId}}-bet",
+    "playerId": "{{playerId}}",
+    "walletId": "{{walletId}}",
+    "roundId": "{{runId}}-round",
+    "gameId": "demo-game",
+    "kind": "BET",
+    "money": {
+      "amount": "30.00",
+      "currency": "BRL"
+    }
+  }
+}
+
+script:pre-request {
+  const accessToken = bru.getEnvVar("providerAToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
+  }
+}
+
+tests {
+  test("HTTP 409", function () {
+    expect(res.getStatus()).to.equal(409);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().code).to.equal("IDEMPOTENCY_CONFLICT");
+  });
+}
+
+docs {
+  Erro esperado: não deve mover saldo nem substituir o resultado original.
+}

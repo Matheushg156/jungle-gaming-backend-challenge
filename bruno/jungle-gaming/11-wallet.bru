@@ -1,0 +1,31 @@
+meta {
+  name: 11 - Consultar saldo de 75
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/wallets/{{walletId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{operatorToken}}
+}
+
+script:pre-request {
+  const accessToken = bru.getEnvVar("operatorToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
+  }
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().balance.amount).to.equal("75.00");
+  });
+}

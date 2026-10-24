@@ -1,0 +1,53 @@
+meta {
+  name: 24 - WIN credita 10 e saldo vai a 110
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{baseUrl}}/wagering/transactions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{providerAToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: provider-a:{{runId}}:win
+  X-Correlation-Id: demo-{{runId}}
+}
+
+body:json {
+  {
+    "providerId": "provider-a",
+    "externalTransactionId": "{{runId}}-win",
+    "playerId": "{{playerId}}",
+    "walletId": "{{walletId}}",
+    "roundId": "{{runId}}-round",
+    "gameId": "demo-game",
+    "kind": "WIN",
+    "money": {
+      "amount": "10.00",
+      "currency": "BRL"
+    }
+  }
+}
+
+script:pre-request {
+  const accessToken = bru.getEnvVar("providerAToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
+  }
+}
+
+tests {
+  test("HTTP 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+  test("Resultado esperado", function () {
+    expect(res.getBody().balance.amount).to.equal("110.00");
+  });
+}
