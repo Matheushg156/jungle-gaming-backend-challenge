@@ -1,6 +1,6 @@
 # Collection Bruno — Jungle Gaming
 
-Collection em formato .bru para o Bruno e sua extensão no VS Code. Requer a branch de extras com autenticação, API e Keycloak em execução. Não é uma collection para a main sem autenticação.
+Collection em formato .bru para o Bruno e sua extensão no VS Code. Requer API com autenticação habilitada e Keycloak em execução.
 
 ## Preparar os serviços
 
@@ -61,7 +61,7 @@ Caso tenha o Bruno CLI instalado, execute nesta pasta:
 bru run --env Local
 ```
 
-A extensão não precisa do CLI instalado para enviar as requisições. A collection foi preparada para a API HTTP; os cenários SQS, concorrência e morte de processos continuam nos testes descritos em PRESENTATION.md.
+A extensão não precisa do CLI instalado para enviar as requisições. A collection foi preparada para a API HTTP; os cenários SQS, concorrência e morte de processos continuam nos testes descritos no [README do projeto](../../README.md#testes-e-verificações).
 
 ## Diagnóstico
 

@@ -1,6 +1,6 @@
-# Autenticação externa — branch de extras
+# Autenticação externa
 
-Esta branch adiciona Keycloak ao escopo original. A main permanece com a entrega obrigatória separada. Começamos por autenticação; os outros extras serão desenvolvidos depois.
+A API usa Keycloak para autenticar provedores e operadores. Este guia explica como obter tokens e testar as permissões localmente.
 
 ## Iniciar
 

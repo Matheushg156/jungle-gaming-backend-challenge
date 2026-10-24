@@ -6,3 +6,16 @@ coverage/
 !.env.example
 *.log
 .DS_Store
+
+# Local tools and generated output
+/.vscode/
+/.idea/
+/.codex/
+/.agents/
+/.aws/
+/reports/
+/test-results/
+*.tsbuildinfo
+
+# Personal presentation notes
+/PRESENTATION.md
