@@ -16,7 +16,14 @@ auth:bearer {
 
 script:post-response {
   if (res.getStatus() === 200) {
-    bru.setVar("ledgerCursor", res.getBody().nextCursor);
+    bru.setEnvVar("ledgerCursor", res.getBody().nextCursor);
+  }
+}
+
+script:pre-request {
+  const accessToken = bru.getEnvVar("operatorToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
   }
 }
 

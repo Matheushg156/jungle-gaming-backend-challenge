@@ -29,16 +29,20 @@ body:json {
 }
 
 script:pre-request {
-  bru.setVar("runId", bru.interpolate("{{$randomUUID}}"));
-  bru.setVar("playerId", bru.interpolate("{{$randomUUID}}"));
-  bru.setVar("walletId", "");
-  bru.setVar("transactionId", "");
-  bru.setVar("ledgerCursor", "");
+  const accessToken = bru.getEnvVar("operatorToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
+  }
+  bru.setEnvVar("runId", bru.interpolate("{{$randomUUID}}"));
+  bru.setEnvVar("playerId", bru.interpolate("{{$randomUUID}}"));
+  bru.setEnvVar("walletId", "");
+  bru.setEnvVar("transactionId", "");
+  bru.setEnvVar("ledgerCursor", "");
 }
 
 script:post-response {
   if (res.getStatus() === 201) {
-    bru.setVar("walletId", res.getBody().id);
+    bru.setEnvVar("walletId", res.getBody().id);
   }
 }
 

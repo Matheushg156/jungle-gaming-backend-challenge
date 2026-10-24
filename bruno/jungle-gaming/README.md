@@ -7,6 +7,8 @@ Collection em formato .bru para o Bruno e sua extensão no VS Code. Requer API c
 Na raiz do projeto:
 
 ```sh
+cp -n .env.example .env
+cp -n bruno/jungle-gaming/environments/Local.bru bruno/jungle-gaming/environments/Local.local.bru
 bun install --frozen-lockfile
 docker compose --profile auth up -d --wait postgres localstack keycloak
 bun run migration:up
@@ -18,7 +20,7 @@ Mantenha esse terminal aberto para os logs. Confira os campos de autenticação 
 
 ## Abrir no VS Code
 
-No painel da extensão Bruno, use a ação para abrir uma collection existente e selecione **esta pasta** (`bruno/jungle-gaming`), que contém `bruno.json`. Não selecione somente um arquivo de request nem a pasta environments. Depois selecione o ambiente **Local**.
+No painel da extensão Bruno, use a ação para abrir uma collection existente e selecione **esta pasta** (`bruno/jungle-gaming`), que contém `bruno.json`. Não selecione somente um arquivo de request nem a pasta environments. Depois selecione o ambiente **Local.local**.
 
 O ambiente configura baseUrl=http://localhost:3000 e issuer=http://localhost:8080/realms/jungle. Se a API usar outra porta, ajuste baseUrl no ambiente. A collection utiliza scripts compatíveis com o sandbox seguro; não requer módulos externos ou acesso a arquivos.
 
@@ -29,7 +31,7 @@ Execute as requisições na ordem numérica ou rode a collection inteira de form
 | Requisições | Cenário                                     | Resultado                                             |
 | ----------- | ------------------------------------------- | ----------------------------------------------------- |
 | 01–02       | Liveness/readiness sem token                | 200; banco e SQS prontos                              |
-| 03–05       | Tokens de operador, provider-a e provider-b | Tokens salvos no runtime                              |
+| 03–05       | Tokens de operador, provider-a e provider-b | Tokens salvos no ambiente local                              |
 | 06          | Criação da wallet                           | Novo jogador, saldo 100.00 e walletId salvo           |
 | 07–08       | BET de 25.00 e replay                       | Saldo 75.00; um único débito                          |
 | 09          | Mesma key com valor diferente               | 409 esperado                                          |
@@ -45,9 +47,9 @@ Os resultados 401, 403, 409 e 422 fazem parte da demonstração e contam como su
 
 ## Variáveis automáticas
 
-As requisições de token usam bru.setVar, sem persistência em disco. A criação da wallet gera runId e playerId novos usando UUIDs e salva walletId. A BET salva transactionId; a paginação salva ledgerCursor. Não é preciso copiar IDs ou tokens manualmente.
+As requisições usam `bru.setEnvVar` para compartilhar tokens e IDs entre as abas da extensão. Na versão 6.0.0 da extensão, alterações de ambiente são persistidas no arquivo; por isso, selecione **Local.local**, cuja cópia é ignorada pelo Git. O ambiente **Local** serve apenas de modelo e a collection bloqueia sua execução para evitar gravar tokens nele. A criação da wallet gera runId e playerId novos usando UUIDs e salva walletId. A BET salva transactionId; a paginação salva ledgerCursor. Não é preciso copiar IDs ou tokens manualmente.
 
-As credenciais do ambiente são as contas públicas de demonstração do realm local. Não coloque credenciais reais nesse arquivo. Tokens não são gravados na collection nem em environment files.
+As credenciais do ambiente são as contas públicas de demonstração do realm local. Não coloque credenciais reais nesse arquivo. Tokens podem ficar no arquivo `environments/Local.local.bru` da sua máquina. Não versione esse arquivo nem compartilhe seu conteúdo.
 
 Os tokens expiram em cinco minutos. Se aparecer 401 no meio da apresentação, execute novamente 03–05 e continue. Para iniciar uma nova demonstração, execute 06 e depois 07–27 em ordem; as wallets anteriores permanecem no banco. Isso evita limpar ou sobrescrever dados.
 
@@ -58,15 +60,17 @@ As assertions de saldo são para a ordem acima. Executar consultas intermediári
 Caso tenha o Bruno CLI instalado, execute nesta pasta:
 
 ```sh
-bru run --env Local
+bru run --env Local.local
 ```
 
 A extensão não precisa do CLI instalado para enviar as requisições. A collection foi preparada para a API HTTP; os cenários SQS, concorrência e morte de processos continuam nos testes descritos no [README do projeto](../../README.md#testes-e-verificações).
 
 ## Diagnóstico
 
-- Erro de conexão: confira a API na porta configurada em Local e mantenha `bun run start:prod` em execução.
+- Erro de conexão: confira a API na porta configurada em Local.local e mantenha `bun run start:prod` em execução.
 - 503 no readiness: confira PostgreSQL, LocalStack, filas e URLs do .env.
 - Falha em 03–05: confira Keycloak na porta 8080 e a importação do realm jungle.
-- Variáveis vazias: selecione Local e execute as requisições anteriores que geram os dados.
+- Variáveis vazias: selecione Local.local e execute as requisições anteriores que geram os dados.
 - Erro de confiança/scripts na extensão: os scripts desta collection local geram IDs e capturam os campos da resposta; habilite sua execução para utilizar o fluxo automático.
+
+Na extensão, `bru.setVar` mantém dados no estado da aba que executou a requisição; outra aba pode não receber os tokens ou IDs. Se você já abriu as requisições, feche as abas Bruno e reabra a collection após esta atualização. Selecione **Local.local** em cada aba e execute 03–05 e depois 06–27 em ordem.

@@ -10,25 +10,96 @@ A implementação usa Bun, TypeScript estrito, NestJS, MikroORM, PostgreSQL e SQ
 
 ## Executar localmente
 
-Requisitos: Bun 1.x e Docker com Compose. A aplicação roda no host; PostgreSQL, LocalStack e Keycloak rodam em containers.
+A aplicação roda no host; PostgreSQL, LocalStack e Keycloak rodam em containers. Execute os comandos na raiz do projeto, um bloco por vez, e só avance quando o anterior terminar sem erro.
+
+### 1. Conferir os requisitos
+
+É necessário ter Bun 1.x e Docker com Compose disponíveis no mesmo terminal em que a API será executada. Em WSL, instale o Bun dentro do ambiente Linux.
+
+```sh
+bun --version
+docker compose version
+```
+
+<details>
+<summary>O terminal não encontra o Bun?</summary>
+
+No Ubuntu/Debian ou WSL com essas distribuições, instale os pré-requisitos e depois o Bun:
+
+```sh
+sudo apt update
+sudo apt install -y curl unzip
+curl -fsSL https://bun.com/install | bash
+```
+
+Abra um novo terminal. Se usar zsh, também pode recarregar a configuração:
+
+```sh
+source ~/.zshrc
+bun --version
+```
+
+Se o Bun foi instalado, mas ainda não for encontrado, adicione estas linhas ao `~/.zshrc` e execute `source ~/.zshrc` novamente:
+
+```sh
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+```
+
+Para outros sistemas ou shells, consulte a [instalação oficial do Bun](https://bun.sh/docs/installation).
+
+</details>
+
+### 2. Instalar as dependências
 
 ```sh
 bun install --frozen-lockfile
 ```
 
-Na primeira execução, crie o arquivo de configuração. Se já existir um `.env`, atualize-o usando `.env.example` como referência.
+### 3. Configurar o ambiente
+
+Na primeira execução, copie o exemplo para `.env`. Não sobrescreva um `.env` existente; atualize seus campos usando `.env.example` como referência.
 
 ```sh
 cp .env.example .env
 ```
 
-Inicie os serviços, aplique as migrations e execute a API:
+O Bun carrega esse arquivo automaticamente. Para o PostgreSQL local deste Compose, ele deve conter:
+
+```dotenv
+DATABASE_URL=postgresql://jungle:jungle_local@localhost:5432/jungle
+```
+
+O erro `DATABASE_URL is required` indica que essa variável não foi carregada. Confira se o arquivo se chama exatamente `.env`, está na raiz do projeto e contém a linha acima. As configurações de autenticação e SQS também estão em `.env.example`.
+
+### 4. Iniciar os serviços
 
 ```sh
 docker compose --profile auth up -d --wait postgres localstack keycloak
+```
+
+Aguarde os três containers ficarem saudáveis. Esse comando inicia a infraestrutura; a API ainda não está rodando.
+
+### 5. Aplicar as migrations
+
+```sh
 bun run migration:up
+```
+
+### 6. Iniciar a API
+
+```sh
 bun run dev
 ```
+
+Mantenha esse terminal aberto. Em outro terminal, confira a API:
+
+```sh
+curl -i http://localhost:3000/health/live
+curl -i http://localhost:3000/health/ready
+```
+
+Ambos devem retornar HTTP 200. No Bruno, essas verificações são as requisições 01 e 02 do ambiente Local.
 
 | Serviço    | Endereço local        |
 | ---------- | --------------------- |
@@ -50,7 +121,7 @@ As migrations são explícitas e versionadas. `bun run migration:down` reverte a
 
 ## Testar a API com Bruno
 
-Abra a pasta `bruno/jungle-gaming` na extensão do Bruno ou no aplicativo desktop e selecione o ambiente **Local**. Execute as 27 requisições em ordem, sem paralelismo.
+Copie `bruno/jungle-gaming/environments/Local.bru` para `bruno/jungle-gaming/environments/Local.local.bru`. Abra a pasta `bruno/jungle-gaming` na extensão do Bruno ou no aplicativo desktop e selecione o ambiente **Local.local**. Esse ambiente guarda os tokens e IDs da demonstração e é ignorado pelo Git. Execute as 27 requisições em ordem, sem paralelismo.
 
 A collection obtém tokens, cria uma wallet e salva os IDs automaticamente. Demonstra apostas, replay, conflitos, permissões, reversões, paginação e reconciliação. Tokens ficam apenas em memória. O [guia da collection](bruno/jungle-gaming/README.md) explica como repetir o fluxo.
 

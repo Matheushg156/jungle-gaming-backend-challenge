@@ -22,7 +22,7 @@ body:form-urlencoded {
 
 script:post-response {
   if (res.getStatus() === 200) {
-    bru.setVar("providerBToken", res.getBody().access_token);
+    bru.setEnvVar("providerBToken", res.getBody().access_token);
   }
 }
 
@@ -36,5 +36,5 @@ tests {
 }
 
 docs {
-  Salva o access token somente nas variáveis de runtime. Não grava token no ambiente nem em arquivos. Expira em cinco minutos; reexecute para renovar.
+  Salva o access token no ambiente Local.local, ignorado pelo Git. Expira em cinco minutos; reexecute para renovar.
 }

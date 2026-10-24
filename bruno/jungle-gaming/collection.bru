@@ -1,3 +1,14 @@
 meta {
   name: Jungle Gaming — apresentação
 }
+
+script:pre-request {
+  if (bru.getEnvName() !== "Local.local") {
+    throw new Error("Selecione Local.local. Copie environments/Local.bru para environments/Local.local.bru antes de executar.");
+  }
+
+  // Remove valores antigos de runtime, que teriam prioridade sobre o ambiente.
+  for (const variable of ["operatorToken", "providerAToken", "providerBToken", "runId", "playerId", "walletId", "transactionId", "ledgerCursor"]) {
+    bru.deleteVar(variable);
+  }
+}

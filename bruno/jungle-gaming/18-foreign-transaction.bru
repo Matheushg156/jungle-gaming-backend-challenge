@@ -14,6 +14,13 @@ auth:bearer {
   token: {{providerBToken}}
 }
 
+script:pre-request {
+  const accessToken = bru.getEnvVar("providerBToken");
+  if (typeof accessToken !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) {
+    throw new Error("Token ausente ou inválido: execute 03–05 no ambiente Local.local.");
+  }
+}
+
 tests {
   test("HTTP 403", function () {
     expect(res.getStatus()).to.equal(403);
