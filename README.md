@@ -99,7 +99,7 @@ curl -i http://localhost:3000/health/live
 curl -i http://localhost:3000/health/ready
 ```
 
-Ambos devem retornar HTTP 200. No Bruno, essas verificações são as requisições 01 e 02 do ambiente Local.
+Ambos devem retornar HTTP 200. No Bruno, essas verificações são as requisições 01 e 02 do ambiente `Local.local`.
 
 | Serviço    | Endereço local        |
 | ---------- | --------------------- |
@@ -123,7 +123,7 @@ As migrations são explícitas e versionadas. `bun run migration:down` reverte a
 
 Copie `bruno/jungle-gaming/environments/Local.bru` para `bruno/jungle-gaming/environments/Local.local.bru`. Abra a pasta `bruno/jungle-gaming` na extensão do Bruno ou no aplicativo desktop e selecione o ambiente **Local.local**. Esse ambiente guarda os tokens e IDs da demonstração e é ignorado pelo Git. Execute as 27 requisições em ordem, sem paralelismo.
 
-A collection obtém tokens, cria uma wallet e salva os IDs automaticamente. Demonstra apostas, replay, conflitos, permissões, reversões, paginação e reconciliação. Tokens ficam apenas em memória. O [guia da collection](bruno/jungle-gaming/README.md) explica como repetir o fluxo.
+A collection obtém tokens, cria uma wallet e salva os IDs automaticamente. Demonstra apostas, replay, conflitos, permissões, reversões, paginação e reconciliação. Na extensão, tokens e IDs são gravados no arquivo local ignorado pelo Git. O [guia da collection](bruno/jungle-gaming/README.md) explica como repetir o fluxo.
 
 A API exige `Authorization: Bearer <access_token>`. Use token de operador para wallets e métricas; use token de provedor para suas transações. O [guia de autenticação](AUTHENTICATION.md) contém as contas locais e o passo a passo para Bruno, Postman ou curl.
 

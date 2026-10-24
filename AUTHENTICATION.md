@@ -4,7 +4,7 @@ A API usa Keycloak para autenticar provedores e operadores. Este guia explica co
 
 ## Iniciar
 
-Atualize seu .env com os campos AUTH_ENABLED, OIDC_ISSUER, OIDC_AUDIENCE e OIDC_JWKS_URI de .env.example. AUTH_ENABLED é true por padrão nesta branch.
+Prepare o `.env` conforme o [setup do projeto](README.md#executar-localmente). Se ele já existir, confira os campos `AUTH_ENABLED`, `OIDC_ISSUER`, `OIDC_AUDIENCE` e `OIDC_JWKS_URI` em `.env.example`. A autenticação é habilitada por padrão.
 
 ```sh
 bun install --frozen-lockfile
@@ -26,7 +26,9 @@ Essas contas são exclusivas para demonstração local:
 
 ## Collection pronta para Bruno
 
-Abra a pasta [bruno/jungle-gaming](bruno/jungle-gaming/README.md) na extensão do Bruno e selecione o ambiente Local. As 27 requisições incluem tokens, variáveis automáticas, operações financeiras, consultas, reconciliação e erros esperados. Execute em ordem; não é necessário copiar tokens e IDs manualmente.
+Copie `bruno/jungle-gaming/environments/Local.bru` para `bruno/jungle-gaming/environments/Local.local.bru`. Abra a pasta `bruno/jungle-gaming` na extensão do Bruno e selecione **Local.local** em cada aba. Esse arquivo guarda os tokens e IDs e é ignorado pelo Git.
+
+Execute as 27 requisições em ordem. A collection obtém os tokens e preenche os IDs automaticamente. O [guia do Bruno](bruno/jungle-gaming/README.md) descreve os cenários e como repetir o fluxo.
 
 ## Emitir token no Bruno/Postman
 
@@ -44,9 +46,9 @@ Use body do tipo **application/x-www-form-urlencoded**:
 | client_id     | demo-operator         |
 | client_secret | operator-local-secret |
 
-A resposta contém access_token e expires_in. Copie access_token para uma variável local da collection e selecione autorização **Bearer Token** nas requisições da API. Não use o client secret como Bearer token. Gere outra requisição de token com demo-provider-a / provider-a-local-secret para as apostas.
+A resposta contém `access_token` e `expires_in`. Copie `access_token` para uma variável local da collection e selecione autorização **Bearer Token** nas requisições da API. Não use o client secret como Bearer token. Gere outra requisição de token com demo-provider-a / provider-a-local-secret para as apostas.
 
-Exemplo equivalente no terminal, que imprime o token na resposta (prefira guardar os tokens em variáveis locais da ferramenta durante a apresentação):
+Para obter o mesmo token pelo terminal:
 
 ```sh
 curl -sS http://localhost:8080/realms/jungle/protocol/openid-connect/token \
@@ -62,7 +64,7 @@ Use na API:
 Authorization: Bearer SEU_ACCESS_TOKEN
 ```
 
-Os exemplos do README continuam com os mesmos bodies e idempotency keys; acrescente Authorization. Ao criar a wallet, utilize o token de operador. Ao enviar apostas com token de demo-provider-a, use providerId=provider-a; o client ID demo-provider-a é diferente do providerId provider-a.
+Os exemplos do [README](README.md#criar-wallet-e-submeter-aposta) usam token de operador para criar a wallet e token de `demo-provider-a` para apostar. No payload da aposta, envie `providerId: "provider-a"`: o identificador do provedor é diferente do client ID usado no Keycloak.
 
 ## Demonstrar autorização
 
@@ -79,7 +81,7 @@ Tokens locais expiram em cinco minutos. Em 401 por expiração, obtenha outro to
 
 ## Testar
 
-A suíte financeira desabilita autenticação explicitamente no preload para continuar exercitando o escopo original. O teste compilado financeiro também usa AUTH_ENABLED=false. Isso não é o padrão da aplicação.
+Os testes financeiros usam `AUTH_ENABLED=false` para exercitar as regras de negócio separadamente da autenticação. Os testes abaixo verificam também a integração com o IdP e as permissões da API.
 
 ```sh
 docker compose --profile test up -d --wait postgres-test localstack-test
@@ -92,7 +94,9 @@ bun run build
 bun tests/support/auth-compiled-smoke.ts
 ```
 
-Configure TEST_DATABASE_URL e TEST_SQS_ENDPOINT conforme README. test:auth emite tokens de um Keycloak real e valida autorização com PostgreSQL real. Também verifica tokens expirados, adulterados, algoritmo/emissor/audiência incorretos, ausência de expiração, ID token e indisponibilidade JWKS usando uma chave de teste isolada. O smoke autenticado verifica a aplicação compilada, autorização, replay, reconciliação, ausência dos tokens nos logs e SIGTERM. A suíte completa executa os testes do verificador; a suíte específica com Keycloak só é habilitada por TEST_OIDC_ISSUER (definido no script test:auth).
+Use `TEST_DATABASE_URL` e `TEST_SQS_ENDPOINT` de `.env.example`. O comando `test:auth` emite tokens no Keycloak e testa as permissões com PostgreSQL real. Os testes do verificador usam uma chave isolada para simular tokens inválidos, expirados e indisponibilidade do JWKS.
+
+O teste da aplicação compilada verifica autorização, replay, reconciliação, ausência de tokens nos logs e encerramento com SIGTERM. Na suíte geral, os cenários com Keycloak são habilitados por `TEST_OIDC_ISSUER`; o script `test:auth` já define essa variável.
 
 ## Limites locais
 
@@ -101,4 +105,4 @@ Configure TEST_DATABASE_URL e TEST_SQS_ENDPOINT conforme README. test:auth emite
 - O Keycloak local é efêmero. Recriar seu container importa o realm novamente e gera novas chaves. Não reutilize seus segredos em produção.
 - Alterar o JSON de realm não atualiza automaticamente um realm já existente. Para reaplicar apenas o IdP local: `docker compose --profile auth up -d --force-recreate --wait keycloak`.
 - As URLs usam localhost:8080 porque a API roda no host. Para containerizar a API será necessário configurar issuer e URL JWKS de forma coerente com a rede e o emissor anunciado.
-- AUTH_ENABLED=false reativa explicitamente o comportamento sem autenticação da entrega original. Não utilize esse modo para expor a API publicamente.
+- `AUTH_ENABLED=false` permite executar a API localmente sem autenticação. Não utilize esse modo para expor a API publicamente.

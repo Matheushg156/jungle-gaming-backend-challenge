@@ -1,6 +1,6 @@
 # Arquitetura e decisões técnicas
 
-O serviço recebe operações por HTTP ou SQS e mantém saldo, ledger, resultado idempotente e eventos consistentes no PostgreSQL. O banco é a fonte das garantias financeiras; a ordenação FIFO reduz duplicatas e contenção, mas não substitui essas garantias.
+O serviço recebe operações por HTTP ou SQS e mantém saldo, ledger, resultado idempotente e eventos consistentes no PostgreSQL. As garantias financeiras ficam no banco. A fila FIFO ajuda com ordenação e deduplicação, mas o processamento também precisa ser seguro diante de duplicatas e concorrência entre instâncias.
 
 ## Organização
 
@@ -31,9 +31,9 @@ A unicidade de reversão é por referência **e tipo**, conforme o enunciado: um
 
 ## Persistência e concorrência
 
-MikroORM foi escolhido por permitir explicitar EntityManager, unidade de trabalho e locks. Cada operação usa `fork()` para isolar seu estado e `transactional()` para delimitar commit/rollback. Flushes intermediários respeitam foreign keys, mas não confirmam a transação.
+Escolhi MikroORM pelo controle explícito da unidade de trabalho e dos locks. Cada operação usa `fork()` para obter um EntityManager isolado e `transactional()` para delimitar commit e rollback. Os flushes intermediários enviam alterações ao banco, mas só o commit confirma o conjunto.
 
-A unidade de concorrência é a wallet. Uma escrita obtém `PESSIMISTIC_WRITE` antes de ler e calcular o saldo, em READ COMMITTED. Instâncias distintas disputam a mesma linha; wallets diferentes podem avançar em paralelo. A espera por lock é limitada a 5 segundos e cada statement a 15 segundos. Timeout aborta a unidade financeira, permitindo reenvio com a mesma key.
+Escolhi lock pessimista por wallet para serializar operações que disputam o mesmo saldo. A escrita obtém `PESSIMISTIC_WRITE` antes de ler e calcular o saldo, em READ COMMITTED. Instâncias distintas disputam a mesma linha; wallets diferentes podem avançar em paralelo. A espera por lock é limitada a 5 segundos e cada statement a 15 segundos. Timeout aborta a unidade financeira, permitindo reenvio com a mesma key.
 
 O fluxo de escrita confirma em uma única transação:
 
@@ -63,7 +63,7 @@ No HTTP, a fonte da key é o header `Idempotency-Key`; no SQS, é `data.idempote
 
 `hashWagerPayload` calcula SHA-256 de JSON UTF-8 com campos de negócio ordenados explicitamente, inclusive dentro de `money`. A referência entra apenas quando fornecida. Key e metadados de transporte não entram nesse hash. Não há normalização de valores: os contratos já exigem formato monetário fixo.
 
-O HTTP pode devolver um replay por leitura prévia. Novas operações repetem a consulta sob lock; constraints resolvem corridas de identidade entre wallets. Mesma key com outro payload é conflito; mesmo identificador externo com outra key também é conflito.
+Antes de obter o lock, a entrada HTTP consulta se a operação já existe e pode retornar seu resultado. Para operações novas, a consulta é repetida sob lock. As constraints impedem que wallets diferentes aceitem simultaneamente a mesma identidade de transação. Mesma key com outro payload é conflito; mesmo identificador externo com outra key também é conflito.
 
 O resultado é um snapshot JSONB persistido junto à operação. Replay preserva saldo, status e failureCode originais e muda apenas `idempotentReplay`. Uma rejeição não se torna processada após novos créditos. Operações pendentes atualizam o snapshot ao mudar de estado; resultados terminais são imutáveis.
 
@@ -79,7 +79,7 @@ O resultado é um snapshot JSONB persistido junto à operação. Replay preserva
 
 Referência ausente ou ainda não terminal mantém PENDING_REFERENCE. Referência terminal rejeitada ou falha causa `REFERENCE_NOT_PROCESSED`. Identidade incompatível é rejeitada assim que conhecida.
 
-A recuperação consulta até 50 candidatas por segundo. Após bloquear a wallet, relê estado e prazo antes de agir. Isso torna seleções duplicadas seguras entre instâncias. Uma falha não impede as demais candidatas do lote.
+A cada execução, a recuperação consulta até 50 candidatas. O worker é agendado a cada segundo. Após bloquear a wallet, relê estado e prazo antes de agir. Isso torna seleções duplicadas seguras entre instâncias. Uma falha não impede as demais candidatas do lote.
 
 A agenda é persistente: atraso inicial de 1 segundo, backoff exponencial até 5 minutos e TTL de 24 horas. O prazo permite atraso operacional sem espera indefinida. Na expiração, uma referência já disponível ainda pode resolver a operação; se continuar ausente, há rejeição com `REFERENCE_NOT_FOUND`. Tentativas ainda pendentes não repetem o evento de pendência.
 
@@ -125,7 +125,7 @@ O encaminhamento confirma primeiro o envio do corpo original e atributos de diag
 
 A outbox contém eventos confirmados na mesma unidade financeira: Processed, Rejected, PendingReference, BalanceChanged e Failed. LOSS gera somente Processed; abertura positiva gera Processed e BalanceChanged. Dados monetários são MoneyProps e datas são ISO no envelope versionado. A correlação original acompanha a recuperação; no SQS, causationId identifica a mensagem.
 
-Cada publisher seleciona uma mensagem com `FOR UPDATE SKIP LOCKED`. Mantém apenas o lock da outbox durante o envio, sem bloquear a wallet. Isso evita leases, mas ocupa uma transação/conexão SQL durante a chamada SQS com timeout. O lote tem até 10 mensagens por segundo por instância.
+Cada publisher seleciona uma mensagem com `FOR UPDATE SKIP LOCKED`. Mantém apenas o lock da outbox durante o envio, sem bloquear a wallet. Essa escolha dispensa um mecanismo de reserva com prazo de expiração, mas mantém uma conexão e uma transação SQL abertas durante a chamada ao SQS. Cada execução tenta publicar até 10 mensagens; o worker é agendado a cada segundo.
 
 Após envio, o publisher confirma `publishedAt`. Erro persiste backoff de 1 segundo até 5 minutos; eventos confirmados não expiram. Uma falha entre aceitação no SQS e commit de publishedAt pode reenviar o mesmo eventId: a publicação é **at-least-once**. Consumidores de saída precisam deduplicar eventId persistentemente. aggregateId é MessageGroupId; eventId é MessageDeduplicationId. Publishers concorrentes podem intercalar eventos da mesma wallet; walletVersion permite identificar a evolução de saldo.
 

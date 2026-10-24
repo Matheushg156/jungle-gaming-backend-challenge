@@ -73,4 +73,4 @@ A extensão não precisa do CLI instalado para enviar as requisições. A collec
 - Variáveis vazias: selecione Local.local e execute as requisições anteriores que geram os dados.
 - Erro de confiança/scripts na extensão: os scripts desta collection local geram IDs e capturam os campos da resposta; habilite sua execução para utilizar o fluxo automático.
 
-Na extensão, `bru.setVar` mantém dados no estado da aba que executou a requisição; outra aba pode não receber os tokens ou IDs. Se você já abriu as requisições, feche as abas Bruno e reabra a collection após esta atualização. Selecione **Local.local** em cada aba e execute 03–05 e depois 06–27 em ordem.
+Se um token ou ID não aparecer em outra aba, feche as abas Bruno, reabra a collection e selecione **Local.local** em cada aba. Execute 03–05 e depois 06–27 em ordem.
